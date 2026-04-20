@@ -6,28 +6,17 @@
 
 ## Current Phase
 
-**Phase:** 2 (Complete ✓)
-**Status:** All plans executed successfully
-**Next Action:** Run `/gsd-verify-phase 2` to verify Phase 2 completion
+**Phase:** 3 (Context gathered, ready for planning)
+**Status:** Phase 3 context captured ✓
+**Next Action:** Run `/gsd-plan-phase 3` to create implementation plans
 
-### Phase 2 Completion Summary
-- **Plan 02-01:** ConfigStore module ✓ (12 tests pass)
-- **Plan 02-02:** WeChatWorkClient ✓ (32 tests pass)
-- **Total tests:** 44 new tests (12 + 32)
-- **Requirements:** WX-01~06 all covered
-
-### Key Deliverables
-- ConfigStore: JSON persistence with .gitignore protection
-- WeChatWorkClient: Message slicing (15 rows/chunk), retry (3x), rate limiting (1s)
-- Exceptions: WeChatAPIError, NetworkError, ConfigError
-- Tests: 44 unit tests + integration test script
-
-### Phase 2 Context Decisions
-- **配置存储**: 应用目录 + JSON + 明文（依赖.gitignore）
-- **消息切片**: 15行/片 + 序号标记 + 表头重复
-- **发送策略**: 1秒间隔 + 阻塞式重试失败片
-- **重试机制**: 3次 + 指数退避(1s,2s,4s) + 30秒超时
-- **客户端架构**: WeChatWorkClient类 + 普通requests
+### Phase 3 Context Decisions
+- **界面布局**: 垂直流式布局，800x600固定窗口
+- **线程策略**: Excel读取和消息发送使用后台线程，after()轮询更新UI
+- **数据预览**: Treeview表格，显示20行，列宽自适应
+- **错误提示**: 分级处理（严重弹窗，普通状态栏）
+- **状态反馈**: 多行状态栏，进度条显示精确百分比
+- **高分屏支持**: Windows启用DPI感知
 
 ## Project Reference
 
@@ -71,8 +60,12 @@ See: `.planning/PROJECT.md` (updated 2026-04-20)
 - ✓ WeChatWorkClient（消息切片、重试机制）
 - ✓ 44单元测试
 
-**Phase 3: GUI界面** (GUI-01~06) - 待执行
-- 设计界面布局
+**Phase 3: GUI界面** (GUI-01~06) - 准备执行
+- ✓ 界面布局决策（垂直流式、800x600）
+- ✓ 线程策略决策（后台线程、after轮询）
+- ✓ 数据预览决策（Treeview、20行）
+- ✓ 错误提示决策（分级处理）
+- ✓ 状态反馈决策（多行状态栏、进度条）
 - 实现主窗口框架
 - 实现各功能组件
 
@@ -89,6 +82,11 @@ See: `.planning/PROJECT.md` (updated 2026-04-20)
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
+| 2026-04-20 | Phase 3: 界面布局 | 垂直流式800x600，符合操作步骤，清晰直观 |
+| 2026-04-20 | Phase 3: 线程策略 | Excel读取和消息发送后台线程，after()轮询更新UI，避免阻塞 |
+| 2026-04-20 | Phase 3: 数据预览 | Treeview显示20行，列宽自适应，充分利用预览区 |
+| 2026-04-20 | Phase 3: 错误提示 | 分级处理（严重弹窗普通状态栏），用户体验更流畅 |
+| 2026-04-20 | Phase 3: 状态反馈 | 多行状态栏+进度条，精确显示操作进度 |
 | 2026-04-20 | Phase 2: 配置存储策略 | 应用目录+JSON+明文，简单直观，依赖.gitignore保护 |
 | 2026-04-20 | Phase 2: 消息切片策略 | 15行/片保守值，保证表格完整性，带序号标记 |
 | 2026-04-20 | Phase 2: 发送策略 | 1秒间隔安全值，阻塞式重试失败片 |
@@ -105,4 +103,4 @@ See: `.planning/PROJECT.md` (updated 2026-04-20)
 - 打包方案已确定：GitHub Actions Windows runner
 
 ---
-*Last updated: 2026-04-20 after Phase 2 context discussion*
+*Last updated: 2026-04-20 after Phase 3 context discussion*

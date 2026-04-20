@@ -6,8 +6,8 @@
 
 ## Current Phase
 
-**Phase:** Not started
-**Next Action:** Run `/gsd-discuss-phase 1` to start Phase 1 (Excel处理)
+**Phase:** 1 (Ready to execute)
+**Next Action:** Run `/gsd-execute-phase 1` to start execution
 
 ## Project Reference
 

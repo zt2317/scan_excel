@@ -24,11 +24,19 @@ import queue
 from pathlib import Path
 
 # Import core modules
-from ..core import (
-    ExcelReader, ColumnDetector, MarkdownFormatter,
-    generate_preview, ConfigStore, WeChatWorkClient
-)
-from ..core.exceptions import WeChatAPIError, NetworkError
+try:
+    from core import (
+        ExcelReader, ColumnDetector, MarkdownFormatter,
+        generate_preview, ConfigStore, WeChatWorkClient
+    )
+    from core.exceptions import WeChatAPIError, NetworkError
+except ImportError:
+    # Fallback for relative imports when running as module
+    from ..core import (
+        ExcelReader, ColumnDetector, MarkdownFormatter,
+        generate_preview, ConfigStore, WeChatWorkClient
+    )
+    from ..core.exceptions import WeChatAPIError, NetworkError
 
 
 class MainWindow:
@@ -157,13 +165,56 @@ class MainWindow:
         ttk.Label(frame, text="Webhook地址：").pack(side=tk.LEFT)
         
         self.webhook_var = tk.StringVar()
-        self.webhook_entry = ttk.Entry(frame, textvariable=self.webhook_var)
+        self.webhook_entry = ttk.Entry(frame, textvariable=self.webhook_var, width=50)
         self.webhook_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        
+        # Add save button
+        save_btn = ttk.Button(frame, text="保存", command=self._on_save_config, width=6)
+        save_btn.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Bind webhook change to update button state
+        self.webhook_var.trace_add('write', self._on_webhook_changed)
         
         # Load existing config
         existing_url = self.config_store.get_webhook_url()
         if existing_url:
             self.webhook_var.set(existing_url)
+
+    def _on_webhook_changed(self, *args):
+        """webhook地址改变时更新按钮状态"""
+        self._update_send_button()
+
+    def _on_save_config(self):
+        """保存webhook配置"""
+        webhook_url = self.webhook_var.get().strip()
+        
+        if not webhook_url:
+            messagebox.showwarning("配置错误", "请输入webhook地址")
+            return
+        
+        try:
+            self.config_store.set_webhook_url(webhook_url)
+            self.status_var.set("配置已保存")
+            self._set_status_color("success")  # D-26: green for success
+            self._update_send_button()
+        except Exception as e:
+            messagebox.showerror("保存失败", f"保存配置时出错：{str(e)}")
+
+    def _set_status_color(self, state: str):
+        """设置状态文字颜色 (D-26: color-coded status)
+        
+        state: 'default' | 'processing' | 'success' | 'error'
+        """
+        colors = {
+            'default': 'black',
+            'processing': 'blue',
+            'success': 'green',
+            'error': 'red'
+        }
+        color = colors.get(state, 'black')
+        
+        # Update label foreground color
+        self.status_label.configure(foreground=color)
     
     def _create_send_frame(self, parent):
         """发送按钮区域 (GUI-05, D-30)"""
@@ -183,18 +234,23 @@ class MainWindow:
         frame = ttk.LabelFrame(parent, text="状态", padding="5")
         frame.pack(fill=tk.X)
         
-        # Status text line 1
+        # Status text line 1 - Store reference to label
         self.status_var = tk.StringVar(value="准备就绪")
-        self.status_label = ttk.Label(frame, textvariable=self.status_var)
+        self.status_label = ttk.Label(
+            frame, 
+            textvariable=self.status_var,
+            foreground="black"  # D-26: default black
+        )
         self.status_label.pack(anchor=tk.W)
         
-        # Progress bar line 2
+        # Progress bar line 2 (D-22: determinate progress bar)
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(
             frame, 
             variable=self.progress_var,
             mode='determinate',
-            maximum=100
+            maximum=100,
+            length=760
         )
         self.progress_bar.pack(fill=tk.X, pady=(5, 0))
     
@@ -224,6 +280,7 @@ class MainWindow:
             self.is_processing = False
             self._update_send_button()
             self.progress_var.set(0)
+            self._set_status_color("error")  # D-26: red for error
             messagebox.showerror(
                 msg.get('title', '错误'),
                 msg.get('message', '发生未知错误')
@@ -233,6 +290,29 @@ class MainWindow:
             # Update the preview tree
             self._update_preview()
             self._update_send_button()  # Re-check if send button should be enabled
+        
+        elif msg_type == 'send_complete':
+            # Handle send completion
+            self.is_processing = False
+            self._update_send_button()
+            self.progress_var.set(100)
+            
+            if msg.get('success'):
+                # Success - show info dialog (D-18: popup for important status)
+                self._set_status_color("success")  # D-26: green
+                self.status_var.set(msg.get('message', '发送成功'))
+                messagebox.showinfo(
+                    msg.get('title', '完成'),
+                    msg.get('message', '操作完成')
+                )
+            else:
+                # Failure - show error dialog (D-17: popup for errors)
+                self._set_status_color("error")  # D-26: red
+                self.status_var.set(msg.get('message', '发送失败'))
+                messagebox.showerror(
+                    msg.get('title', '错误'),
+                    msg.get('message', '发送失败')
+                )
         
         elif msg_type == 'done':
             self.is_processing = False
@@ -289,6 +369,7 @@ class MainWindow:
         self._update_send_button()
         self.status_var.set("正在读取Excel文件...")
         self.progress_var.set(0)
+        self._set_status_color("processing")  # D-26: blue for processing
         
         # Start background thread (D-05, D-06)
         thread = threading.Thread(target=self._load_excel_thread, daemon=True)
@@ -396,11 +477,123 @@ class MainWindow:
             
             # Set width with some padding
             self.preview_tree.column(col, width=min(max_content_width + 20, 200))
-    
+
     def _on_send(self):
-        """处理发送消息 (D-06: background thread)"""
-        # To be implemented in Plan 03
-        pass
+        """处理发送按钮点击 (D-06: background thread)"""
+        webhook_url = self.webhook_var.get().strip()
+        
+        if not webhook_url:
+            messagebox.showerror("配置错误", "请先配置webhook地址")
+            return
+        
+        if not self.current_data:
+            messagebox.showerror("数据错误", "请先选择并加载Excel文件")
+            return
+        
+        # Confirm send
+        total_rows = len(self.current_data)
+        confirm = messagebox.askyesno(
+            "确认发送",
+            f"确定要发送 {total_rows} 行数据到企业微信吗？"
+        )
+        if not confirm:
+            return
+        
+        # Start sending
+        self._start_sending(webhook_url)
+
+    def _start_sending(self, webhook_url: str):
+        """开始发送消息"""
+        self.is_processing = True
+        self._update_send_button()
+        self.progress_var.set(0)
+        self._set_status_color("processing")  # D-26: blue for processing
+        
+        # Format data to markdown
+        self.worker_queue.put({'type': 'status', 'text': '正在格式化数据...'})
+        markdown = self.formatter.format(self.current_data)
+        
+        # Start background thread (D-06)
+        thread = threading.Thread(
+            target=self._send_thread,
+            args=(webhook_url, markdown),
+            daemon=True
+        )
+        thread.start()
+
+    def _send_thread(self, webhook_url: str, markdown: str):
+        """后台线程：发送消息到企业微信 (D-06)"""
+        try:
+            # Create client
+            client = WeChatWorkClient(webhook_url=webhook_url)
+            
+            # Count chunks for progress (Phase 2 client splits automatically)
+            # We need to estimate or get from client
+            self.worker_queue.put({'type': 'status', 'text': '正在发送消息...'})
+            self.worker_queue.put({'type': 'progress', 'value': 10})
+            
+            # Send message
+            # Note: WeChatWorkClient.send_markdown handles splitting internally
+            # and returns results for each chunk
+            results = client.send_markdown(markdown)
+            
+            # Update progress based on results
+            if results:
+                success_count = sum(1 for r in results if r.get('success'))
+                total_count = len(results)
+                progress = 10 + int(90 * success_count / total_count) if total_count > 0 else 100
+                self.worker_queue.put({'type': 'progress', 'value': progress})
+            
+            # Check results
+            all_success = all(r.get('success') for r in results)
+            
+            if all_success:
+                total_chunks = len(results)
+                self.worker_queue.put({
+                    'type': 'send_complete',
+                    'success': True,
+                    'message': f'消息发送成功！共发送{total_chunks}片消息',
+                    'title': '发送成功'
+                })
+            else:
+                # Find first error
+                failed_results = [r for r in results if not r.get('success')]
+                if failed_results:
+                    first_error = failed_results[0].get('error', '未知错误')
+                    self.worker_queue.put({
+                        'type': 'send_complete',
+                        'success': False,
+                        'message': f'发送失败：{first_error}',
+                        'title': '发送失败'
+                    })
+        
+        except WeChatAPIError as e:
+            self.worker_queue.put({
+                'type': 'send_complete',
+                'success': False,
+                'message': f'企业微信API错误：{str(e)}',
+                'title': '发送失败'
+            })
+        
+        except NetworkError as e:
+            self.worker_queue.put({
+                'type': 'send_complete',
+                'success': False,
+                'message': f'网络错误：{str(e)}',
+                'title': '网络错误'
+            })
+        
+        except Exception as e:
+            self.worker_queue.put({
+                'type': 'send_complete',
+                'success': False,
+                'message': f'发送时出错：{str(e)}',
+                'title': '错误'
+            })
+        
+        finally:
+            self.worker_queue.put({'type': 'progress', 'value': 100})
+            self.worker_queue.put({'type': 'done'})
     
     def run(self):
         """启动主循环"""

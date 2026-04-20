@@ -6,10 +6,10 @@
 ## Phase Overview
 
 | # | Phase | Goal | Requirements | Status |
-|---|-------|------|--------------|--------|
+|---|---|-------|------|--------------|--------|
 | 1 | Excel处理 | 读取并解析Excel数据 | EXCL-01~05, MD-01~03 | **✓ Complete** |
-| 2 | 企业微信集成 | 实现消息推送功能 | WX-01~06 | Pending |
-| 3 | GUI界面 | 构建用户界面 | GUI-01~06 | Pending |
+| 2 | 企业微信集成 | 实现消息推送功能 | WX-01~06 | **✓ Complete** |
+| 3 | GUI界面 | 构建用户界面 | GUI-01~06 | **Planning Complete** |
 | 4 | 错误处理 | 健壮的错误处理 | ERR-01~03 | Pending |
 | 5 | 打包发布 | Windows可执行文件 | - | Pending |
 
@@ -66,16 +66,16 @@
 - WX-06: 失败提示
 
 **Success Criteria:**
-1. 能保存webhook URL到配置文件
-2. 消息能正确切片（<1800字符/片）
-3. 顺序发送多条消息
-4. 网络错误时友好提示
+1. ✓ 能保存webhook URL到配置文件
+2. ✓ 消息能正确切片（<1800字符/片）
+3. ✓ 顺序发送多条消息
+4. ✓ 网络错误时友好提示
 
-**Plans:** 2 plans in 2 waves
+**Plans:** 2 plans | **Tests:** 32 passed
 
 **Plan List:**
-- [ ] **02-01** — Configuration storage module (JSON persistence, .gitignore protection)
-- [ ] **02-02** — WeChat client with slicing and retry (15 rows/chunk, 1s interval, exponential backoff)
+- [x] **02-01** — Configuration storage module (JSON persistence, .gitignore protection) ([SUMMARY](phases/02-wechat-integration/02-01-SUMMARY.md))
+- [x] **02-02** — WeChat client with slicing and retry (15 rows/chunk, 1s interval, exponential backoff) ([SUMMARY](phases/02-wechat-integration/02-02-SUMMARY.md))
 
 **Wave Structure:**
 - Wave 1: 02-01 (ConfigStore - no dependencies)
@@ -84,6 +84,7 @@
 **Dependencies:** Phase 1
 
 **Canonical refs:**
+- `.planning/phases/02-wechat-integration/02-CONTEXT.md` - Phase 2决策
 - `.planning/research/FEATURES.md` - 企业微信API限制
 - `.planning/research/PITFALLS.md` - 推送陷阱
 
@@ -104,18 +105,26 @@
 3. 操作反馈及时
 4. 高DPI显示正常
 
-**Build Order:**
-1. 设计界面布局
-2. 实现主窗口框架
-3. 实现文件选择组件
-4. 实现数据预览表格
-5. 实现配置和发送界面
-6. 添加状态栏
+**Plans:** 3 plans in 3 waves
+
+**Plan List:**
+- [ ] **03-01** — Main window framework (DPI awareness, 5-frame layout, thread queue) ([PLAN](phases/03-gui-interface/03-01-PLAN.md))
+- [ ] **03-02** — File selection and preview (background thread, Treeview with 20 rows) ([PLAN](phases/03-gui-interface/03-02-PLAN.md))
+- [ ] **03-03** — Config save and send (webhook persistence, message sending, status feedback) ([PLAN](phases/03-gui-interface/03-03-PLAN.md))
+
+**Wave Structure:**
+- Wave 1: 03-01 (MainWindow framework - no dependencies)
+- Wave 2: 03-02 (File selection & preview - depends on 03-01)
+- Wave 3: 03-03 (Config & send - depends on 03-01, 03-02)
 
 **Dependencies:** Phase 1, Phase 2
 
 **Canonical refs:**
+- `.planning/phases/03-gui-interface/03-CONTEXT.md` - Phase 3决策
 - `.planning/research/PITFALLS.md` - GUI陷阱
+- `src/core/excel_reader.py` - Excel读取接口
+- `src/core/config.py` - ConfigStore接口
+- `src/core/wechat_client.py` - WeChatWorkClient接口
 
 ---
 
@@ -181,10 +190,10 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EXCL-01~05 | Phase 1 | Pending |
-| MD-01~03 | Phase 1 | Pending |
-| WX-01~06 | Phase 2 | Pending |
-| GUI-01~06 | Phase 3 | Pending |
+| EXCL-01~05 | Phase 1 | **✓ Complete** |
+| MD-01~03 | Phase 1 | **✓ Complete** |
+| WX-01~06 | Phase 2 | **✓ Complete** |
+| GUI-01~06 | Phase 3 | Ready to execute |
 | ERR-01~03 | Phase 4 | Pending |
 
 **Total Phases:** 5
@@ -205,4 +214,4 @@
 
 ---
 
-*Last updated: 2026-04-20 after initial roadmap creation*
+*Last updated: 2026-04-20 after Phase 3 planning complete*

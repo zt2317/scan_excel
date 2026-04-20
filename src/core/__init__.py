@@ -2,3 +2,15 @@
 
 包含Excel读取、列检测、Markdown格式化等核心功能
 """
+
+from .excel_reader import ExcelReader
+from .column_detector import ColumnDetector
+from .formatter import MarkdownFormatter
+from .preview import generate_preview
+
+__all__ = [
+    'ExcelReader',
+    'ColumnDetector',
+    'MarkdownFormatter',
+    'generate_preview',
+]

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "read": {
+      "/Users/zhangtao/Work/py/scan_excel/.opencode/get-shit-done/*": "allow"
+    },
+    "external_directory": {
+      "/Users/zhangtao/Work/py/scan_excel/.opencode/get-shit-done/*": "allow"
+    }
+  }
+}

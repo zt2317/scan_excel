@@ -6,9 +6,16 @@
 
 ## Current Phase
 
-**Phase:** 2 (Ready to plan)
-**Status:** Phase 1 Complete ✓
-**Next Action:** Run `/gsd-discuss-phase 2` to start Phase 2 (企业微信集成)
+**Phase:** 2 (Planned, ready to execute)
+**Status:** Phase 2 plans created ✓
+**Next Action:** Run `/gsd-execute-phase 2` to implement
+
+### Phase 2 Context Decisions
+- **配置存储**: 应用目录 + JSON + 明文（依赖.gitignore）
+- **消息切片**: 15行/片 + 序号标记 + 表头重复
+- **发送策略**: 1秒间隔 + 阻塞式重试失败片
+- **重试机制**: 3次 + 指数退避(1s,2s,4s) + 30秒超时
+- **客户端架构**: WeChatWorkClient类 + 普通requests
 
 ## Project Reference
 
@@ -76,6 +83,11 @@ See: `.planning/PROJECT.md` (updated 2026-04-20)
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
+| 2026-04-20 | Phase 2: 配置存储策略 | 应用目录+JSON+明文，简单直观，依赖.gitignore保护 |
+| 2026-04-20 | Phase 2: 消息切片策略 | 15行/片保守值，保证表格完整性，带序号标记 |
+| 2026-04-20 | Phase 2: 发送策略 | 1秒间隔安全值，阻塞式重试失败片 |
+| 2026-04-20 | Phase 2: 重试机制 | 3次+指数退避(1s,2s,4s)+30秒超时，标准策略 |
+| 2026-04-20 | Phase 2: 客户端架构 | WeChatWorkClient类封装，普通requests简化实现 |
 | 2026-04-20 | 使用GitHub Actions打包 | Mac无法直接生成Windows exe，GitHub Actions Windows runner是最佳方案 |
 | 2026-04-20 | webhook配置不上传git | 保护敏感信息，使用.gitignore排除 |
 | 2026-04-20 | Excel文件不上传git | 用户数据隐私保护 |
@@ -87,4 +99,4 @@ See: `.planning/PROJECT.md` (updated 2026-04-20)
 - 打包方案已确定：GitHub Actions Windows runner
 
 ---
-*Last updated: 2026-04-20 after initialization*
+*Last updated: 2026-04-20 after Phase 2 context discussion*

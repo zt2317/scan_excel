@@ -71,12 +71,15 @@
 3. 顺序发送多条消息
 4. 网络错误时友好提示
 
-**Build Order:**
-1. 实现配置存储模块
-2. 实现企业微信客户端
-3. 实现消息切片算法
-4. 添加重试机制
-5. 集成测试
+**Plans:** 2 plans in 2 waves
+
+**Plan List:**
+- [ ] **02-01** — Configuration storage module (JSON persistence, .gitignore protection)
+- [ ] **02-02** — WeChat client with slicing and retry (15 rows/chunk, 1s interval, exponential backoff)
+
+**Wave Structure:**
+- Wave 1: 02-01 (ConfigStore - no dependencies)
+- Wave 2: 02-02 (WeChatWorkClient - depends on ConfigStore)
 
 **Dependencies:** Phase 1
 

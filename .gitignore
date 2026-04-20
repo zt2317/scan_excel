@@ -5,6 +5,10 @@ config.yml
 .env
 *.config
 
+# Phase 2: Webhook configuration (contains sensitive data)
+config/webhook_config.json
+config/*.json
+
 # Excel文件（用户数据）
 *.xlsx
 *.xls

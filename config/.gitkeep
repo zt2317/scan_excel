@@ -1,0 +1,2 @@
+# This directory stores local configuration files
+# webhook_config.json is excluded from git - see .gitignore

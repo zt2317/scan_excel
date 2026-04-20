@@ -119,8 +119,21 @@ class MainWindow:
         tree_frame = ttk.Frame(frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.preview_tree = ttk.Treeview(tree_frame, show="headings")
+        # Define columns (D-15: 5 target columns)
+        columns = ["日期", "发货人", "提单号", "入库未扫", "出库未扫"]
+        
+        self.preview_tree = ttk.Treeview(
+            tree_frame, 
+            show="headings",
+            columns=columns,
+            height=10  # Show ~10 rows at a time
+        )
         self.preview_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Configure column headers and widths (D-13: adaptive column widths)
+        for col in columns:
+            self.preview_tree.heading(col, text=col)
+            self.preview_tree.column(col, width=100, anchor="w")
         
         # Vertical scrollbar
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.preview_tree.yview)
@@ -131,6 +144,10 @@ class MainWindow:
         hsb = ttk.Scrollbar(frame, orient="horizontal", command=self.preview_tree.xview)
         hsb.pack(fill=tk.X)
         self.preview_tree.configure(xscrollcommand=hsb.set)
+        
+        # Alternating row colors (D-16)
+        self.preview_tree.tag_configure('even', background='#f0f0f0')
+        self.preview_tree.tag_configure('odd', background='white')
     
     def _create_config_frame(self, parent):
         """配置区域 (GUI-04, D-28~D-29)"""
@@ -193,19 +210,37 @@ class MainWindow:
             self.root.after(100, self._check_queue)  # Check every 100ms
     
     def _handle_worker_message(self, msg: Dict):
-        """处理后台线程消息"""
+        """处理后台线程消息 (D-09: main thread handles UI updates)"""
         msg_type = msg.get('type')
+        
         if msg_type == 'progress':
             self.progress_var.set(msg.get('value', 0))
+        
         elif msg_type == 'status':
             self.status_var.set(msg.get('text', ''))
+        
+        elif msg_type == 'error':
+            # Show error dialog (D-17: serious errors show popup)
+            self.is_processing = False
+            self._update_send_button()
+            self.progress_var.set(0)
+            messagebox.showerror(
+                msg.get('title', '错误'),
+                msg.get('message', '发生未知错误')
+            )
+        
+        elif msg_type == 'update_preview':
+            # Update the preview tree
+            self._update_preview()
+            self._update_send_button()  # Re-check if send button should be enabled
+        
         elif msg_type == 'done':
             self.is_processing = False
             self._update_send_button()
     
     def _update_send_button(self):
         """更新发送按钮状态 (D-30: enable conditions)"""
-        # Enable if: file selected AND data loaded AND webhook configured
+        # Enable if: file selected AND data loaded AND webhook configured AND not processing
         has_file = self.current_file is not None
         has_data = len(self.current_data) > 0
         has_webhook = bool(self.webhook_var.get().strip())
@@ -217,9 +252,150 @@ class MainWindow:
             self.send_btn.config(state="disabled")
     
     def _on_select_file(self):
-        """处理文件选择 (D-05: background thread)"""
-        # To be implemented in Plan 02
-        pass
+        """处理文件选择按钮点击 (D-28)"""
+        # Get last folder from config
+        last_folder = self.config_store.get_last_folder()
+        if not last_folder or not Path(last_folder).exists():
+            last_folder = str(Path.home() / "Documents")
+        
+        # Open file dialog
+        file_path = filedialog.askopenfilename(
+            title="选择Excel文件",
+            initialdir=last_folder,
+            filetypes=[
+                ("Excel文件", "*.xlsx *.xls"),
+                ("Excel 2007+", "*.xlsx"),
+                ("Excel 97-2003", "*.xls"),
+                ("所有文件", "*.*")
+            ]
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        # Update path display
+        self.file_path_var.set(file_path)
+        self.current_file = Path(file_path)
+        
+        # Save folder to config
+        self.config_store.set_last_folder(str(self.current_file.parent))
+        
+        # Start background loading (D-05)
+        self._start_loading()
+
+    def _start_loading(self):
+        """开始加载Excel文件"""
+        self.is_processing = True
+        self._update_send_button()
+        self.status_var.set("正在读取Excel文件...")
+        self.progress_var.set(0)
+        
+        # Start background thread (D-05, D-06)
+        thread = threading.Thread(target=self._load_excel_thread, daemon=True)
+        thread.start()
+
+    def _load_excel_thread(self):
+        """后台线程：读取Excel文件 (D-05)"""
+        try:
+            if not self.current_file:
+                return
+            
+            # Update progress via queue
+            self.worker_queue.put({'type': 'progress', 'value': 10})
+            self.worker_queue.put({'type': 'status', 'text': '正在读取Excel文件...'})
+            
+            # Read Excel (Phase 1 component)
+            raw_data = self.excel_reader.read(str(self.current_file))
+            
+            self.worker_queue.put({'type': 'progress', 'value': 30})
+            self.worker_queue.put({'type': 'status', 'text': '正在识别列...'})
+            
+            if not raw_data or len(raw_data) < 2:
+                self.worker_queue.put({
+                    'type': 'error',
+                    'message': 'Excel文件为空或格式不正确',
+                    'title': '文件错误'
+                })
+                return
+            
+            # Detect columns (Phase 1 component)
+            headers = raw_data[0]
+            column_map = self.column_detector.detect(headers)
+            
+            self.worker_queue.put({'type': 'progress', 'value': 50})
+            self.worker_queue.put({'type': 'status', 'text': '正在提取数据...'})
+            
+            # Extract data
+            extracted = self.column_detector.extract_data(raw_data, column_map)
+            
+            self.worker_queue.put({'type': 'progress', 'value': 70})
+            self.worker_queue.put({'type': 'status', 'text': '正在准备预览...'})
+            
+            # Store data
+            self.current_data = extracted
+            
+            self.worker_queue.put({'type': 'progress', 'value': 90})
+            self.worker_queue.put({
+                'type': 'status', 
+                'text': f'读取完成，共{len(extracted)}行数据'
+            })
+            
+            # Signal to update preview
+            self.worker_queue.put({'type': 'update_preview'})
+            self.worker_queue.put({'type': 'progress', 'value': 100})
+            
+        except Exception as e:
+            self.worker_queue.put({
+                'type': 'error',
+                'message': f'读取Excel文件失败：{str(e)}',
+                'title': '读取错误'
+            })
+        finally:
+            self.worker_queue.put({'type': 'done'})
+
+    def _update_preview(self):
+        """更新预览表格 (D-12: show 20 rows)"""
+        # Clear existing data
+        for item in self.preview_tree.get_children():
+            self.preview_tree.delete(item)
+        
+        if not self.current_data:
+            return
+        
+        # Show up to 20 rows (D-12: increased from Phase 1's 10)
+        max_rows = 20
+        display_data = self.current_data[:max_rows]
+        
+        for i, row in enumerate(display_data):
+            values = [
+                row.get('日期', '-'),
+                row.get('发货人', '-'),
+                row.get('提单号', '-'),
+                row.get('入库未扫', '-'),
+                row.get('出库未扫', '-')
+            ]
+            
+            # Alternating row colors (D-16)
+            tag = 'even' if i % 2 == 0 else 'odd'
+            self.preview_tree.insert('', 'end', values=values, tags=(tag,))
+        
+        # Adjust column widths based on content (D-13)
+        self._adjust_column_widths()
+
+    def _adjust_column_widths(self):
+        """根据内容自适应调整列宽 (D-13)"""
+        for col in self.preview_tree['columns']:
+            # Get max width needed
+            header_width = len(col) * 15  # Estimate header width
+            
+            max_content_width = header_width
+            for item in self.preview_tree.get_children():
+                cell_value = self.preview_tree.set(item, col)
+                cell_width = len(str(cell_value)) * 10
+                max_content_width = max(max_content_width, cell_width)
+            
+            # Set width with some padding
+            self.preview_tree.column(col, width=min(max_content_width + 20, 200))
     
     def _on_send(self):
         """处理发送消息 (D-06: background thread)"""

@@ -7,8 +7,8 @@
 ## Current Phase
 
 **Phase:** 2 (Executing)
-**Status:** Wave 1 in progress ◆
-**Next Action:** Executing Plan 02-01 (ConfigStore module)
+**Status:** Wave 1 complete ✓, Wave 2 in progress ◆
+**Next Action:** Executing Plan 02-02 (WeChat client with slicing/retry)
 
 ### Phase 2 Context Decisions
 - **配置存储**: 应用目录 + JSON + 明文（依赖.gitignore）

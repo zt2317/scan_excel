@@ -7,7 +7,7 @@
 
 | # | Phase | Goal | Requirements | Status |
 |---|-------|------|--------------|--------|
-| 1 | Excel处理 | 读取并解析Excel数据 | EXCL-01~05, MD-01~03 | Ready |
+| 1 | Excel处理 | 读取并解析Excel数据 | EXCL-01~05, MD-01~03 | **✓ Complete** |
 | 2 | 企业微信集成 | 实现消息推送功能 | WX-01~06 | Pending |
 | 3 | GUI界面 | 构建用户界面 | GUI-01~06 | Pending |
 | 4 | 错误处理 | 健壮的错误处理 | ERR-01~03 | Pending |
@@ -30,18 +30,18 @@
 - MD-01~03: Markdown格式化
 
 **Success Criteria:**
-1. 能成功读取.xlsx和.xls文件
-2. 正确提取5个目标列数据
-3. 生成格式正确的Markdown表格
-4. 预览显示正常
+1. ✓ 能成功读取.xlsx和.xls文件
+2. ✓ 正确提取5个目标列数据
+3. ✓ 生成格式正确的Markdown表格
+4. ✓ 预览显示正常
 
-**Plans:** 4 plans
+**Plans:** 4 plans | **Tests:** 34 (33 passed, 1 skipped)
 
 **Plan List:**
-- [ ] 01-01-PLAN.md — Project setup and core module structure
-- [ ] 01-02-PLAN.md — Excel reader implementation (openpyxl + xlrd)
-- [ ] 01-03-PLAN.md — Column detection and data processing
-- [ ] 01-04-PLAN.md — Markdown formatter and integration
+- [x] **01-01** — Project setup and core module structure ([SUMMARY](phases/01-excel-processing/01-01-SUMMARY.md))
+- [x] **01-02** — Excel reader implementation (openpyxl + xlrd) ([SUMMARY](phases/01-excel-processing/01-02-SUMMARY.md))
+- [x] **01-03** — Column detection with fuzzy matching ([SUMMARY](phases/01-excel-processing/01-03-SUMMARY.md))
+- [x] **01-04** — Markdown formatter and data preview ([SUMMARY](phases/01-excel-processing/01-04-SUMMARY.md))
 
 **Dependencies:** None
 

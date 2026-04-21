@@ -9,19 +9,21 @@ Excel数据推送助手 - 主窗口模块
 5. 状态栏区
 """
 
-# DPI Awareness (Windows)
-import ctypes
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(1)
-except:
-    pass  # Non-Windows or old version
-
+import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from typing import Optional, List, Dict, Any
 import threading
 import queue
 from pathlib import Path
+
+# DPI Awareness (Windows only)
+if sys.platform == 'win32':
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except:
+        pass  # Old Windows version
 
 # Import core modules
 try:

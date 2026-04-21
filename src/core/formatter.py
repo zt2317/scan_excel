@@ -1,6 +1,6 @@
 """Markdown格式化器
 
-将数据格式化为Markdown表格，支持对齐和日期格式化
+将数据格式化为美观的Markdown表格，支持对齐和日期格式化
 """
 
 from typing import List, Dict, Any
@@ -9,9 +9,9 @@ import re
 
 
 class MarkdownFormatter:
-    """格式化数据为Markdown表格 per D-10, D-11"""
+    """格式化数据为Markdown表格"""
 
-    # 列显示名称（中文）per D-11
+    # 列显示名称（中文）
     COLUMN_DISPLAY = {
         'date': '日期',
         'shipper': '发货人',
@@ -20,16 +20,20 @@ class MarkdownFormatter:
         'outbound_pending': '出库未扫'
     }
 
-    # 列顺序（用于保持一致的输出顺序）
+    # 列顺序
     COLUMN_ORDER = ['date', 'shipper', 'tracking', 'inbound_pending', 'outbound_pending']
 
-    def format(self, data: List[Dict[str, Any]]) -> str:
-        """将数据格式化为Markdown表格
+    # 列宽配置（企业微信显示优化）
+    COLUMN_WIDTHS = {
+        'date': 12,
+        'shipper': 10,
+        'tracking': 18,
+        'inbound_pending': 14,
+        'outbound_pending': 14
+    }
 
-        Per D-10: 对齐表格格式
-        Per D-11: 加粗表头
-        Per MD-01: 标准Markdown表格
-        Per MD-02: 加粗表头
+    def format(self, data: List[Dict[str, Any]]) -> str:
+        """将数据格式化为美观的Markdown表格
 
         Args:
             data: 数据列表，每项是字典
@@ -40,25 +44,22 @@ class MarkdownFormatter:
         if not data:
             return "暂无数据"
 
-        # 确定要显示的列（取数据第一行的keys与COLUMN_ORDER的交集）
+        # 确定要显示的列
         available_cols = set(data[0].keys())
         columns = [col for col in self.COLUMN_ORDER if col in available_cols]
 
         if not columns:
             return "暂无数据"
 
-        # 计算每列的最大宽度
-        widths = self._calculate_column_widths(data, columns)
-
         lines = []
 
-        # 表头（加粗）
-        header_cells = [f"**{self.COLUMN_DISPLAY.get(col, col)}**" for col in columns]
+        # 表头
+        header_cells = [self._pad_text(self.COLUMN_DISPLAY.get(col, col), self.COLUMN_WIDTHS.get(col, 10)) for col in columns]
         header_line = '| ' + ' | '.join(header_cells) + ' |'
         lines.append(header_line)
 
         # 分隔线
-        separator_cells = ['-' * (widths[col] + 4) for col in columns]  # +4 for bold markers
+        separator_cells = ['-' * self.COLUMN_WIDTHS.get(col, 10) for col in columns]
         separator_line = '|' + '|'.join(separator_cells) + '|'
         lines.append(separator_line)
 
@@ -67,45 +68,40 @@ class MarkdownFormatter:
             row_cells = []
             for col in columns:
                 value = row.get(col, '-')
-                # 日期格式化 per MD-03
+                # 日期格式化
                 if col == 'date':
                     value = self._format_date(value)
-                # 确保是字符串
+                # 处理换行（替换为空格）
                 value_str = str(value) if value is not None else '-'
-                row_cells.append(value_str)
+                value_str = value_str.replace('\n', ' ').replace('\r', '')
+                # 截断过长的文本
+                width = self.COLUMN_WIDTHS.get(col, 10)
+                if len(value_str) > width:
+                    value_str = value_str[:width-2] + '..'
+                row_cells.append(self._pad_text(value_str, width))
             row_line = '| ' + ' | '.join(row_cells) + ' |'
             lines.append(row_line)
 
         return '\n'.join(lines)
 
-    def _calculate_column_widths(self, data: List[Dict[str, Any]], columns: List[str]) -> Dict[str, int]:
-        """计算每列的最大宽度"""
-        widths = {}
-
-        for col in columns:
-            # 表头长度
-            header_len = len(self.COLUMN_DISPLAY.get(col, col))
-            # 数据最大长度
-            max_data_len = 0
-            for row in data:
-                value = row.get(col, '-')
-                if col == 'date':
-                    value = self._format_date(value)
-                max_data_len = max(max_data_len, len(str(value)))
-            widths[col] = max(header_len, max_data_len)
-
-        return widths
+    def _pad_text(self, text: str, width: int) -> str:
+        """将文本填充到指定宽度（处理中文宽度）"""
+        # 计算实际显示宽度（中文字符算2个宽度）
+        display_width = 0
+        for char in text:
+            if ord(char) > 127:  # 中文字符
+                display_width += 2
+            else:
+                display_width += 1
+        
+        # 填充空格
+        padding = width - display_width
+        if padding > 0:
+            return text + ' ' * padding
+        return text
 
     def _format_date(self, value: Any) -> str:
-        """格式化日期为 YYYY-MM-DD per D-07, MD-03
-
-        支持多种输入格式：
-        - 2024-01-15
-        - 2024/01/15
-        - 15/01/2024
-        - 15-Jan-2024
-        - 2024年01月15日
-        """
+        """格式化日期为 YYYY-MM-DD"""
         if not value or value == '-':
             return '-'
 
@@ -117,16 +113,12 @@ class MarkdownFormatter:
 
         # 尝试多种格式解析
         date_formats = [
-            # 标准格式
             '%Y-%m-%d',
             '%Y/%m/%d',
-            # 日月年格式
             '%d/%m/%Y',
             '%d-%m-%Y',
-            # 带中文
             '%Y年%m月%d日',
             '%Y年%m月%d',
-            # 其他常见格式
             '%d-%b-%Y',
             '%d/%b/%Y',
             '%Y%m%d',

@@ -52,6 +52,7 @@ class ExcelReader:
         """使用 openpyxl 读取 .xlsx 文件"""
         try:
             import openpyxl
+            from openpyxl.utils.datetime import from_excel_serial
         except ImportError:
             raise ExcelFormatError(
                 '缺少必要的依赖库：openpyxl',
@@ -65,8 +66,25 @@ class ExcelReader:
             
             data = []
             for row in sheet.iter_rows(values_only=True):
-                # 将每个单元格转换为字符串
-                row_data = [str(cell) if cell is not None else "" for cell in row]
+                row_data = []
+                for cell in row:
+                    if cell is None:
+                        row_data.append("")
+                    elif isinstance(cell, (int, float)):
+                        # Check if it looks like an Excel date serial (around 40000-50000 for recent years)
+                        if 40000 <= cell <= 60000:
+                            try:
+                                from datetime import datetime, timedelta
+                                # Convert Excel serial to date
+                                excel_epoch = datetime(1899, 12, 30)
+                                dt = excel_epoch + timedelta(days=cell)
+                                row_data.append(dt.strftime('%Y-%m-%d'))
+                            except:
+                                row_data.append(str(cell))
+                        else:
+                            row_data.append(str(cell))
+                    else:
+                        row_data.append(str(cell))
                 data.append(row_data)
             
             if not data:

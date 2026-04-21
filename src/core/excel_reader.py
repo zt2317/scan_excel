@@ -4,6 +4,7 @@
 """
 
 import os
+from datetime import datetime, timedelta
 from typing import List, Any, Optional
 
 from .exceptions import ExcelFormatError
@@ -52,7 +53,6 @@ class ExcelReader:
         """使用 openpyxl 读取 .xlsx 文件"""
         try:
             import openpyxl
-            from openpyxl.utils.datetime import from_excel_serial
         except ImportError:
             raise ExcelFormatError(
                 '缺少必要的依赖库：openpyxl',
@@ -71,18 +71,21 @@ class ExcelReader:
                     if cell is None:
                         row_data.append("")
                     elif isinstance(cell, (int, float)):
-                        # Check if it looks like an Excel date serial (around 40000-50000 for recent years)
+                        # Check if it looks like an Excel date serial
                         if 40000 <= cell <= 60000:
                             try:
-                                from datetime import datetime, timedelta
                                 # Convert Excel serial to date
+                                # Excel epoch is 1899-12-30 (with 1900 leap year bug)
                                 excel_epoch = datetime(1899, 12, 30)
-                                dt = excel_epoch + timedelta(days=cell)
+                                dt = excel_epoch + timedelta(days=float(cell))
                                 row_data.append(dt.strftime('%Y-%m-%d'))
                             except:
                                 row_data.append(str(cell))
                         else:
                             row_data.append(str(cell))
+                    elif isinstance(cell, datetime):
+                        # Already a datetime object
+                        row_data.append(cell.strftime('%Y-%m-%d'))
                     else:
                         row_data.append(str(cell))
                 data.append(row_data)

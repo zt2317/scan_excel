@@ -65,7 +65,22 @@ class ImageGenerator:
         columns = [col for col in self.COLUMN_ORDER if col in available_cols]
         
         total_width = sum(self.COLUMN_WIDTHS.get(col, 100) for col in columns)
-        total_height = self.header_height + len(data) * self.row_height + 20
+        
+        # 计算每行的实际高度，然后求和
+        total_row_height = 0
+        for row in data:
+            row_height = self.row_height
+            for col in columns:
+                value = row.get(col, '-')
+                if col == 'date':
+                    value = self._format_date(value)
+                lines = str(value).split('\n')
+                # 每行文字高度约20像素
+                needed_height = max(len(lines) * 20 + 20, self.row_height)
+                row_height = max(row_height, needed_height)
+            total_row_height += row_height
+        
+        total_height = self.header_height + total_row_height + 20
         
         # 创建图片
         img = Image.new('RGB', (total_width, total_height), (255, 255, 255))

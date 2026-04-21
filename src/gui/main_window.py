@@ -336,7 +336,7 @@ class MainWindow(QMainWindow):
         group = QGroupBox("数据预览")
         layout = QVBoxLayout(group)
         
-        # Table widget
+        # Table widget - show all data with scroll
         self.preview_table = QTableWidget()
         self.preview_table.setColumnCount(5)
         self.preview_table.setHorizontalHeaderLabels(
@@ -346,7 +346,9 @@ class MainWindow(QMainWindow):
         self.preview_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.preview_table.verticalHeader().setVisible(False)
-        self.preview_table.setMaximumHeight(250)
+        # Enable scroll bars for all data
+        self.preview_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.preview_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         
         layout.addWidget(self.preview_table)
         parent_layout.addWidget(group, stretch=1)
@@ -537,7 +539,7 @@ class MainWindow(QMainWindow):
             self.current_thread = None
     
     def _update_preview(self, data: list):
-        """更新预览表格"""
+        """更新预览表格 - 显示所有数据"""
         # Store the data
         self.current_data = data
         
@@ -548,11 +550,11 @@ class MainWindow(QMainWindow):
             self._update_send_button()
             return
         
-        # Show up to 20 rows
-        max_rows = min(20, len(self.current_data))
+        # Show ALL data (not just 20 rows)
+        max_rows = len(self.current_data)
         self.preview_table.setRowCount(max_rows)
         
-        for i, row in enumerate(self.current_data[:max_rows]):
+        for i, row in enumerate(self.current_data):
             values = [
                 row.get('日期', '-'),
                 row.get('发货人', '-'),

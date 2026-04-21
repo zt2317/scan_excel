@@ -554,13 +554,23 @@ class MainWindow(QMainWindow):
         max_rows = len(self.current_data)
         self.preview_table.setRowCount(max_rows)
         
+        # Map column keys from detector to display names
+        column_mapping = {
+            'date': '日期',
+            'shipper': '发货人',
+            'tracking': '提单号',
+            'inbound_pending': '入库未扫',
+            'outbound_pending': '出库未扫'
+        }
+        
         for i, row in enumerate(self.current_data):
+            # Use English keys from detector (date, shipper, tracking, etc.)
             values = [
-                row.get('日期', '-'),
-                row.get('发货人', '-'),
-                row.get('提单号', '-'),
-                row.get('入库未扫', '-'),
-                row.get('出库未扫', '-')
+                row.get('date', '-'),
+                row.get('shipper', '-'),
+                row.get('tracking', '-'),
+                row.get('inbound_pending', '-'),
+                row.get('outbound_pending', '-')
             ]
             
             for j, value in enumerate(values):

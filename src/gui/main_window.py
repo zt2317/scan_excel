@@ -45,8 +45,13 @@ class MainWindow:
     WINDOW_WIDTH = 800
     WINDOW_HEIGHT = 600
     
-    def __init__(self):
-        self.root = tk.Tk()
+    def __init__(self, root=None):
+        """初始化主窗口
+        
+        Args:
+            root: Tk根窗口实例（可选，如果不提供则创建新的）
+        """
+        self.root = root if root else tk.Tk()
         self.root.title("Excel数据推送助手")
         self.root.geometry(f"{self.WINDOW_WIDTH}x{self.WINDOW_HEIGHT}")
         self.root.resizable(False, False)  # D-02: Fixed size

@@ -57,9 +57,43 @@ class NetworkError(Exception):
         self.original_error = original_error
 
 
+class ExcelFormatError(Exception):
+    """Excel文件格式错误
+    
+    当Excel文件无法读取或格式不正确时抛出。
+    提供友好的中文错误信息和解决建议。
+    
+    Attributes:
+        message: 用户友好的错误描述
+        error_code: 错误类型代码（可选）
+        suggestion: 解决建议
+    """
+    
+    ERROR_CODES = {
+        'FILE_NOT_FOUND': '文件不存在',
+        'UNSUPPORTED_FORMAT': '不支持的格式',
+        'CORRUPTED_FILE': '文件已损坏',
+        'EMPTY_FILE': '文件为空',
+        'PASSWORD_PROTECTED': '密码保护',
+        'DEPENDENCY_MISSING': '缺少依赖',
+    }
+    
+    def __init__(self, message: str, error_code: str = None, suggestion: str = None):
+        super().__init__(message)
+        self.message = message
+        self.error_code = error_code
+        self.suggestion = suggestion
+    
+    def __str__(self):
+        if self.suggestion:
+            return f"{self.message}。{self.suggestion}"
+        return self.message
+
+
 # 重新导出ConfigError以便统一导入
 __all__ = [
     'WeChatAPIError',
     'NetworkError',
     'ConfigError',
+    'ExcelFormatError',
 ]

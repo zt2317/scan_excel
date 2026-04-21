@@ -39,7 +39,7 @@ class MarkdownFormatter:
             data: 数据列表，每项是字典
 
         Returns:
-            Markdown表格字符串
+            Markdown表格字符串（支持HTML换行）
         """
         if not data:
             return "暂无数据"
@@ -54,12 +54,12 @@ class MarkdownFormatter:
         lines = []
 
         # 表头
-        header_cells = [self._pad_text(self.COLUMN_DISPLAY.get(col, col), self.COLUMN_WIDTHS.get(col, 10)) for col in columns]
+        header_cells = [self.COLUMN_DISPLAY.get(col, col) for col in columns]
         header_line = '| ' + ' | '.join(header_cells) + ' |'
         lines.append(header_line)
 
-        # 分隔线
-        separator_cells = ['-' * self.COLUMN_WIDTHS.get(col, 10) for col in columns]
+        # 分隔线（自动宽度）
+        separator_cells = ['---' for _ in columns]
         separator_line = '|' + '|'.join(separator_cells) + '|'
         lines.append(separator_line)
 
@@ -71,14 +71,11 @@ class MarkdownFormatter:
                 # 日期格式化
                 if col == 'date':
                     value = self._format_date(value)
-                # 处理换行（替换为空格）
+                # 处理值
                 value_str = str(value) if value is not None else '-'
-                value_str = value_str.replace('\n', ' ').replace('\r', '')
-                # 截断过长的文本
-                width = self.COLUMN_WIDTHS.get(col, 10)
-                if len(value_str) > width:
-                    value_str = value_str[:width-2] + '..'
-                row_cells.append(self._pad_text(value_str, width))
+                # 保留换行，用<br>标签（企业微信支持HTML）
+                value_str = value_str.replace('\n', '<br>').replace('\r', '')
+                row_cells.append(value_str)
             row_line = '| ' + ' | '.join(row_cells) + ' |'
             lines.append(row_line)
 

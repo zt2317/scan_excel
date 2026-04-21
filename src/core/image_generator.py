@@ -175,7 +175,7 @@ class ImageGenerator:
                 row_height = max(row_height, needed_height)
             rows_height.append(row_height)
         
-        total_height = self.header_height + sum(rows_height) + 20
+        total_height = self.header_height + sum(rows_height) + 50  # 增加50像素底部空间用于页码
         
         # 如果高度太大，需要缩放
         max_height = 4000  # 最大高度限制
@@ -224,11 +224,13 @@ class ImageGenerator:
             
             y += row_height
         
-        # 添加批次标记
+        # 添加批次标记（在表格下方空白区域）
         if total_batches > 1:
             batch_text = f"第{batch_num}/{total_batches}页"
             text_width = self._calculate_text_width(draw, batch_text, font)
-            draw.text((total_width - text_width - 10, total_height - 25), 
+            # 在表格结束后画页码（y位置 + 15像素间隔）
+            page_y = self.header_height + sum(rows_height) + 15
+            draw.text((total_width - text_width - 10, page_y), 
                      batch_text, fill=(100, 100, 100), font=font)
         
         # 保存并压缩

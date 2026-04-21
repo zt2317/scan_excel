@@ -379,6 +379,39 @@ class MainWindow:
                 msg.get('message', '发生未知错误')
             )
         
+        elif msg_type == 'excel_error':
+            # Handle ExcelFormatError
+            self.is_processing = False
+            self._update_send_button()
+            self.progress_var.set(0)
+            self._set_status_color("error")
+            error = msg.get('error')
+            if error:
+                self._handle_excel_error(error)
+        
+        elif msg_type == 'webhook_error':
+            # Handle WeChatAPIError
+            self.is_processing = False
+            self._update_send_button()
+            self.progress_var.set(100)
+            self._set_status_color("error")
+            error = msg.get('error')
+            if error:
+                self._handle_webhook_error(error)
+        
+        elif msg_type == 'network_error':
+            # Handle NetworkError with retry option
+            self.is_processing = False
+            self._update_send_button()
+            self.progress_var.set(100)
+            self._set_status_color("error")
+            error = msg.get('error')
+            if error:
+                should_retry = self._handle_network_error(error)
+                if should_retry:
+                    # User chose to retry
+                    self.root.after(100, lambda: self._on_send())
+        
         elif msg_type == 'update_preview':
             # Update the preview tree
             self._update_preview()
@@ -518,6 +551,12 @@ class MainWindow:
             self.worker_queue.put({'type': 'update_preview'})
             self.worker_queue.put({'type': 'progress', 'value': 100})
             
+        except ExcelFormatError as e:
+            self.worker_queue.put({
+                'type': 'excel_error',
+                'error': e,
+                'title': 'Excel文件错误'
+            })
         except Exception as e:
             self.worker_queue.put({
                 'type': 'error',
@@ -662,18 +701,14 @@ class MainWindow:
         
         except WeChatAPIError as e:
             self.worker_queue.put({
-                'type': 'send_complete',
-                'success': False,
-                'message': f'企业微信API错误：{str(e)}',
-                'title': '发送失败'
+                'type': 'webhook_error',
+                'error': e
             })
         
         except NetworkError as e:
             self.worker_queue.put({
-                'type': 'send_complete',
-                'success': False,
-                'message': f'网络错误：{str(e)}',
-                'title': '网络错误'
+                'type': 'network_error',
+                'error': e
             })
         
         except Exception as e:

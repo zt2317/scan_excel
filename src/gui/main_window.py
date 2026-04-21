@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QTableWidget, QTableWidgetItem,
     QProgressBar, QGroupBox, QFileDialog, QMessageBox,
-    QHeaderView, QAbstractItemView, QApplication
+    QHeaderView, QAbstractItemView, QApplication, QTabWidget
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor
@@ -25,7 +25,7 @@ from PyQt6.QtGui import QColor
 # Import core modules
 try:
     from core import (
-        ExcelReader, ColumnDetector, MarkdownFormatter,
+        ExcelReader, SheetData, ColumnDetector, MarkdownFormatter,
         generate_preview, ConfigStore, WeChatWorkClient
     )
     from core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
@@ -33,11 +33,15 @@ try:
 except ImportError:
     # Fallback for relative imports when running as module
     from ..core import (
-        ExcelReader, ColumnDetector, MarkdownFormatter,
+        ExcelReader, SheetData, ColumnDetector, MarkdownFormatter,
         generate_preview, ConfigStore, WeChatWorkClient
     )
     from ..core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
     from ..core.image_generator import ImageGenerator
+
+
+# Sheet数据类型别名（GUI内部使用的格式）
+GUISheetData = Dict[str, Any]  # {'name': sheet_name, 'data': List[Dict], 'row_count': int}
 
 
 class WorkerThread(QThread):
@@ -50,7 +54,7 @@ class WorkerThread(QThread):
     network_error_signal = pyqtSignal(object)  # NetworkError
     completed_signal = pyqtSignal(bool, str, str)  # success, message, title
     done_signal = pyqtSignal()
-    update_preview_signal = pyqtSignal(list, str)  # data, sheet_name
+    update_preview_signal = pyqtSignal(list)  # sheets_data: List[SheetData]
     
     def __init__(self):
         super().__init__()
@@ -61,48 +65,76 @@ class WorkerThread(QThread):
 
 
 class ExcelLoadThread(WorkerThread):
-    """Excel加载后台线程"""
+    """Excel加载后台线程 - 支持多sheet"""
     
     def __init__(self, file_path: Path, excel_reader, column_detector):
         super().__init__()
         self.file_path = file_path
         self.excel_reader = excel_reader
         self.column_detector = column_detector
-        self.extracted_data = []
-        self.sheet_name = ""
+        self.extracted_sheets: List[GUISheetData] = []
     
     def run(self):
         try:
             self.progress_signal.emit(10)
             self.status_signal.emit('正在读取Excel文件...')
             
-            # Read Excel (返回数据和sheet名称)
-            raw_data, self.sheet_name = self.excel_reader.read(str(self.file_path))
+            # 读取所有sheet（已过滤空sheet）
+            sheets = self.excel_reader.read_all_sheets(str(self.file_path))
             
-            self.progress_signal.emit(30)
-            self.status_signal.emit('正在识别列...')
-            
-            if not raw_data or len(raw_data) < 2:
-                self.error_signal.emit('文件错误', 'Excel文件为空或格式不正确')
+            if not sheets:
+                self.error_signal.emit('文件错误', 'Excel文件没有包含有效数据的sheet')
                 return
             
-            # Detect columns
-            headers = raw_data[0]
-            column_map = self.column_detector.detect(headers)
+            self.progress_signal.emit(30)
+            self.status_signal.emit(f'发现{len(sheets)}个有效sheet，正在处理...')
             
-            self.progress_signal.emit(50)
-            self.status_signal.emit('正在提取数据...')
+            # 处理每个sheet
+            total_rows = 0
+            self.extracted_sheets = []
             
-            # Extract data
-            self.extracted_data = self.column_detector.extract_data(raw_data, column_map)
+            for idx, sheet in enumerate(sheets):
+                if not self._is_running:
+                    return
+                
+                self.status_signal.emit(f'正在处理sheet {idx+1}/{len(sheets)}: {sheet.name}...')
+                
+                if not sheet.data or len(sheet.data) < 2:
+                    continue  # 跳过无效sheet
+                
+                # 检测列
+                headers = sheet.data[0]
+                column_map = self.column_detector.detect(headers)
+                
+                # 提取数据
+                extracted_data = self.column_detector.extract_data(sheet.data, column_map)
+                
+                if extracted_data:
+                    self.extracted_sheets.append({
+                        'name': sheet.name,
+                        'data': extracted_data,
+                        'row_count': len(extracted_data)
+                    })
+                    total_rows += len(extracted_data)
+                
+                progress = 30 + int(50 * (idx + 1) / len(sheets))
+                self.progress_signal.emit(progress)
+            
+            if not self.extracted_sheets:
+                self.error_signal.emit('文件错误', '所有sheet都没有有效数据')
+                return
             
             self.progress_signal.emit(90)
-            self.status_signal.emit(f'读取完成，共{len(self.extracted_data)}行数据')
+            self.status_signal.emit(f'读取完成，共{len(self.extracted_sheets)}个sheet，{total_rows}行数据')
             
-            # Pass data and sheet_name back via signal
-            self.update_preview_signal.emit(self.extracted_data, self.sheet_name)
+            # 传递所有sheet数据
+            self.update_preview_signal.emit(self.extracted_sheets)
             self.progress_signal.emit(100)
-            self.completed_signal.emit(True, f'成功读取{len(self.extracted_data)}行数据', '完成')
+            self.completed_signal.emit(
+                True, 
+                f'成功读取{len(self.extracted_sheets)}个sheet，共{total_rows}行数据', 
+                '完成'
+            )
             
         except ExcelFormatError as e:
             self.excel_error_signal.emit(e)
@@ -113,67 +145,90 @@ class ExcelLoadThread(WorkerThread):
 
 
 class SendThread(WorkerThread):
-    """发送消息后台线程"""
+    """发送消息后台线程 - 支持多sheet"""
     
-    def __init__(self, webhook_url: str, data: List[Dict], client_class, sheet_name: str = ""):
+    def __init__(self, webhook_url: str, sheets_data: List[GUISheetData], client_class):
         super().__init__()
         self.webhook_url = webhook_url
-        self.data = data
+        self.sheets_data = sheets_data
         self.client_class = client_class
-        self.sheet_name = sheet_name
     
     def run(self):
         try:
             # Create client
             client = self.client_class(webhook_url=self.webhook_url)
-            
-            self.status_signal.emit('正在生成图片...')
-            self.progress_signal.emit(10)
-            
-            # Generate images (batched) with sheet_name
             image_gen = ImageGenerator()
-            image_bytes_list = image_gen.generate_table_images(self.data, self.sheet_name)
-            total_images = len(image_bytes_list)
             
-            self.status_signal.emit(f'生成{total_images}张图片，开始发送...')
-            self.progress_signal.emit(20)
+            total_images_sent = 0
+            total_sheets = len(self.sheets_data)
             
-            # Send images one by one
-            results = []
-            for i, image_bytes in enumerate(image_bytes_list, 1):
-                self.status_signal.emit(f'正在发送第{i}/{total_images}张图片...')
-                progress = 20 + int(70 * i / total_images)
-                self.progress_signal.emit(progress)
-                
-                result = client.send_image(image_bytes)
-                results.append(result)
-                
-                if not result.get('success'):
-                    error = result.get('error', '未知错误')
-                    self.completed_signal.emit(
-                        False,
-                        f'第{i}张图片发送失败：{error}',
-                        '发送失败'
-                    )
+            for sheet_idx, sheet in enumerate(self.sheets_data, 1):
+                if not self._is_running:
                     return
                 
-                # Delay between images
-                if i < total_images:
-                    import time
-                    time.sleep(1.0)
+                sheet_name = sheet['name']
+                data = sheet['data']
+                
+                self.status_signal.emit(f'正在处理sheet {sheet_idx}/{total_sheets}: {sheet_name}...')
+                
+                # 计算总进度：每张sheet占20%的起始进度，后续80%用于生成和发送图片
+                sheet_base_progress = int(20 * sheet_idx / total_sheets)
+                self.progress_signal.emit(sheet_base_progress)
+                
+                # 生成该sheet的图片
+                image_bytes_list = image_gen.generate_table_images(data, sheet_name)
+                total_images = len(image_bytes_list)
+                
+                self.status_signal.emit(
+                    f'sheet "{sheet_name}" 生成{total_images}张图片，开始发送...'
+                )
+                
+                # 发送该sheet的所有图片
+                for i, image_bytes in enumerate(image_bytes_list, 1):
+                    if not self._is_running:
+                        return
+                    
+                    self.status_signal.emit(
+                        f'[{sheet_idx}/{total_sheets}] {sheet_name} - '
+                        f'正在发送第{i}/{total_images}张图片...'
+                    )
+                    
+                    # 计算进度：当前sheet占80%中的一部分
+                    sheet_progress_range = 80 / total_sheets
+                    progress_in_sheet = (i / total_images) * sheet_progress_range
+                    progress = int(20 + (sheet_idx - 1) * sheet_progress_range + progress_in_sheet)
+                    self.progress_signal.emit(min(progress, 99))
+                    
+                    result = client.send_image(image_bytes)
+                    
+                    if not result.get('success'):
+                        error = result.get('error', '未知错误')
+                        self.completed_signal.emit(
+                            False,
+                            f'sheet "{sheet_name}" 第{i}张图片发送失败：{error}',
+                            '发送失败'
+                        )
+                        return
+                    
+                    total_images_sent += 1
+                    
+                    # Delay between images
+                    if i < total_images:
+                        import time
+                        time.sleep(1.0)
             
             self.progress_signal.emit(100)
             
-            if total_images > 1:
+            if total_sheets > 1:
                 self.completed_signal.emit(
                     True, 
-                    f'成功发送{total_images}张图片！',
+                    f'成功发送{total_sheets}个sheet，共{total_images_sent}张图片！',
                     '发送成功'
                 )
             else:
                 self.completed_signal.emit(
                     True, 
-                    '图片发送成功！',
+                    f'成功发送{total_images_sent}张图片！',
                     '发送成功'
                 )
         
@@ -212,8 +267,8 @@ class MainWindow(QMainWindow):
         
         # State
         self.current_file: Optional[Path] = None
-        self.current_data: List[Dict] = []
-        self.current_sheet_name: str = ""
+        self.current_sheets: List[GUISheetData] = []  # 存储多sheet数据
+        self.current_sheet_name: str = ""  # 保持向后兼容
         self.is_processing = False
         self.current_thread: Optional[WorkerThread] = None
         self.should_retry_send = False
@@ -351,32 +406,41 @@ class MainWindow(QMainWindow):
         parent_layout.addWidget(group)
     
     def _create_preview_frame(self, parent_layout):
-        """数据预览区域"""
+        """数据预览区域 - 支持多sheet"""
         group = QGroupBox("数据预览")
         layout = QVBoxLayout(group)
         
-        # Table widget - show all data with scroll
-        self.preview_table = QTableWidget()
-        self.preview_table.setColumnCount(5)
-        self.preview_table.setHorizontalHeaderLabels(
+        # 使用TabWidget显示多sheet
+        from PyQt6.QtWidgets import QTabWidget
+        self.preview_tabs = QTabWidget()
+        
+        # 存储每个sheet对应的表格控件
+        self.preview_tables: Dict[int, QTableWidget] = {}
+        
+        layout.addWidget(self.preview_tabs)
+        parent_layout.addWidget(group, stretch=1)
+    
+    def _create_preview_table(self) -> QTableWidget:
+        """创建标准格式的预览表格"""
+        table = QTableWidget()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(
             ["日期", "发货人", "提单号", "入库未扫", "出库未扫"]
         )
-        self.preview_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.preview_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.preview_table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        table.verticalHeader().setVisible(False)
         # Enable scroll bars for all data
-        self.preview_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.preview_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         # Enable word wrap for multiline content
-        self.preview_table.setWordWrap(True)
+        table.setWordWrap(True)
         # Auto-adjust row height
-        self.preview_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         # Set default row height
-        self.preview_table.verticalHeader().setDefaultSectionSize(40)
-        
-        layout.addWidget(self.preview_table)
-        parent_layout.addWidget(group, stretch=1)
+        table.verticalHeader().setDefaultSectionSize(40)
+        return table
     
     def _create_config_frame(self, parent_layout):
         """配置区域"""
@@ -437,7 +501,7 @@ class MainWindow(QMainWindow):
     def _update_send_button(self):
         """更新发送按钮状态"""
         has_file = self.current_file is not None
-        has_data = len(self.current_data) > 0
+        has_data = len(self.current_sheets) > 0
         has_webhook = bool(self.webhook_entry.text().strip())
         not_processing = not self.is_processing
         
@@ -563,48 +627,51 @@ class MainWindow(QMainWindow):
         if self.current_thread:
             self.current_thread = None
     
-    def _update_preview(self, data: list, sheet_name: str):
-        """更新预览表格"""
-        # Store the data and sheet_name
-        self.current_data = data
-        self.current_sheet_name = sheet_name  # 存储sheet名称
+    def _update_preview(self, sheets_data: list):
+        """更新预览表格 - 支持多sheet"""
+        # Store the sheets data
+        self.current_sheets = sheets_data
         
-        # Clear table
-        self.preview_table.setRowCount(0)
+        # 清空现有的tabs
+        self.preview_tabs.clear()
+        self.preview_tables.clear()
         
-        if not self.current_data:
+        if not self.current_sheets:
             self._update_send_button()
             return
         
-        # Show ALL data (not just 20 rows)
-        max_rows = len(self.current_data)
-        self.preview_table.setRowCount(max_rows)
-        
-        # Map column keys from detector to display names
-        column_mapping = {
-            'date': '日期',
-            'shipper': '发货人',
-            'tracking': '提单号',
-            'inbound_pending': '入库未扫',
-            'outbound_pending': '出库未扫'
-        }
-        
-        for i, row in enumerate(self.current_data):
-            # Use English keys from detector (date, shipper, tracking, etc.)
-            values = [
-                row.get('date', '-'),
-                row.get('shipper', '-'),
-                row.get('tracking', '-'),
-                row.get('inbound_pending', '-'),
-                row.get('outbound_pending', '-')
-            ]
+        # 为每个sheet创建一个tab
+        for idx, sheet in enumerate(self.current_sheets):
+            sheet_name = sheet['name']
+            data = sheet['data']
+            row_count = sheet.get('row_count', len(data))
             
-            for j, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
-                # Alternating row colors
-                if i % 2 == 0:
-                    item.setBackground(QColor(240, 240, 240))
-                self.preview_table.setItem(i, j, item)
+            # 创建表格
+            table = self._create_preview_table()
+            self.preview_tables[idx] = table
+            
+            # 填充数据
+            table.setRowCount(len(data))
+            
+            for i, row in enumerate(data):
+                values = [
+                    row.get('date', '-'),
+                    row.get('shipper', '-'),
+                    row.get('tracking', '-'),
+                    row.get('inbound_pending', '-'),
+                    row.get('outbound_pending', '-')
+                ]
+                
+                for j, value in enumerate(values):
+                    item = QTableWidgetItem(str(value))
+                    # Alternating row colors
+                    if i % 2 == 0:
+                        item.setBackground(QColor(240, 240, 240))
+                    table.setItem(i, j, item)
+            
+            # 添加tab，显示sheet名称和行数
+            tab_label = f"{sheet_name} ({row_count}行)"
+            self.preview_tabs.addTab(table, tab_label)
         
         self._update_send_button()
     
@@ -632,15 +699,23 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "配置错误", "请先配置webhook地址")
             return
         
-        if not self.current_data:
+        if not self.current_sheets:
             QMessageBox.critical(self, "数据错误", "请先选择并加载Excel文件")
             return
         
-        total_rows = len(self.current_data)
+        # 计算总数据行数
+        total_rows = sum(sheet.get('row_count', len(sheet['data'])) for sheet in self.current_sheets)
+        sheet_count = len(self.current_sheets)
+        
+        if sheet_count > 1:
+            message = f"确定要发送 {sheet_count} 个sheet，共 {total_rows} 行数据到企业微信吗？"
+        else:
+            message = f"确定要发送 {total_rows} 行数据到企业微信吗？"
+        
         reply = QMessageBox.question(
             self,
             "确认发送",
-            f"确定要发送 {total_rows} 行数据到企业微信吗？",
+            message,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
@@ -650,7 +725,7 @@ class MainWindow(QMainWindow):
         self._start_sending(webhook_url)
     
     def _start_sending(self, webhook_url: str):
-        """开始发送消息"""
+        """开始发送消息 - 支持多sheet"""
         self.is_processing = True
         self._update_send_button()
         self.progress_bar.setValue(0)
@@ -659,9 +734,8 @@ class MainWindow(QMainWindow):
         # Create and start thread
         self.current_thread = SendThread(
             webhook_url,
-            self.current_data,
-            WeChatWorkClient,
-            self.current_sheet_name  # 传递 sheet 名称
+            self.current_sheets,
+            WeChatWorkClient
         )
         
         # Connect signals

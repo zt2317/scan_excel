@@ -3,7 +3,7 @@
 包含Excel读取、列检测、Markdown格式化、配置存储、企业微信推送等核心功能
 """
 
-from .excel_reader import ExcelReader
+from .excel_reader import ExcelReader, SheetData
 from .column_detector import ColumnDetector
 from .formatter import MarkdownFormatter
 from .preview import generate_preview
@@ -13,6 +13,7 @@ from .wechat_client import WeChatWorkClient
 
 __all__ = [
     'ExcelReader',
+    'SheetData',
     'ColumnDetector',
     'MarkdownFormatter',
     'generate_preview',

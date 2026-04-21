@@ -73,18 +73,23 @@ class ImageGenerator:
         
         # 尝试加载字体
         try:
-            # macOS字体
-            font = ImageFont.truetype('/System/Library/Fonts/PingFang.ttc', 14)
-            header_font = ImageFont.truetype('/System/Library/Fonts/PingFang.ttc', 16)
+            # macOS 中文字体
+            font = ImageFont.truetype('/System/Library/Fonts/STHeiti Light.ttc', 14)
+            header_font = ImageFont.truetype('/System/Library/Fonts/STHeiti Medium.ttc', 16)
         except:
             try:
-                # Windows字体
-                font = ImageFont.truetype('msyh.ttc', 14)
-                header_font = ImageFont.truetype('msyh.ttc', 16)
+                # 备选字体
+                font = ImageFont.truetype('/System/Library/Fonts/NotoSansCJK.ttc', 14)
+                header_font = ImageFont.truetype('/System/Library/Fonts/NotoSansCJK.ttc', 16)
             except:
-                # 使用默认字体
-                font = ImageFont.load_default()
-                header_font = ImageFont.load_default()
+                try:
+                    # Windows 字体
+                    font = ImageFont.truetype('msyh.ttc', 14)
+                    header_font = ImageFont.truetype('msyh.ttc', 16)
+                except:
+                    # 使用默认字体（可能不支持中文）
+                    font = ImageFont.load_default()
+                    header_font = ImageFont.load_default()
         
         # 绘制表头
         x = 0

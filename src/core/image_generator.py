@@ -307,65 +307,6 @@ class ImageGenerator:
         subtitle_x = (width - subtitle_width) // 2
         subtitle_y = 35
         draw.text((subtitle_x, subtitle_y), subtitle, fill=(100, 100, 100), font=subtitle_font)
-        
-        # 绘制数据行
-        y = self.header_height
-        for i, row in enumerate(data):
-            row_height = rows_height[i]
-            bg_color = self.ROW_BG_COLOR_EVEN if i % 2 == 0 else self.ROW_BG_COLOR_ODD
-            
-            draw.rectangle([0, y, total_width, y + row_height], fill=bg_color)
-            
-            x = 0
-            for col in columns:
-                width = column_widths[col]
-                value = row.get(col, '-')
-                if col == 'date':
-                    value = self._format_date(value)
-                
-                draw.rectangle([x, y, x + width, y + row_height], 
-                             outline=self.BORDER_COLOR, width=1)
-                
-                text = str(value) if value is not None else '-'
-                self._draw_text_left_aligned(draw, text, x + self.padding, y + self.padding,
-                                            width - 2 * self.padding, row_height - 2 * self.padding,
-                                            font, self.ROW_TEXT_COLOR)
-                x += width
-            
-            y += row_height
-        
-        # 添加批次标记（在表格下方空白区域）
-        if total_batches > 1:
-            batch_text = f"第{batch_num}/{total_batches}页"
-            text_width = self._calculate_text_width(draw, batch_text, font)
-            # 在表格结束后画页码（y位置 + 15像素间隔）
-            page_y = self.header_height + sum(rows_height) + 15
-            draw.text((total_width - text_width - 10, page_y), 
-                     batch_text, fill=(100, 100, 100), font=font)
-        
-        # 保存并压缩
-        buffer = io.BytesIO()
-        img.save(buffer, format='PNG', optimize=True)
-        buffer.seek(0)
-        
-        # 检查大小，如果超过限制则压缩
-        image_bytes = buffer.getvalue()
-        max_size = self.MAX_IMAGE_SIZE_MB * 1024 * 1024
-        
-        if len(image_bytes) > max_size:
-            # 转换为JPEG并压缩
-            buffer = io.BytesIO()
-            img = img.convert('RGB')
-            # 逐步降低质量直到满足大小要求
-            for quality in [85, 70, 50, 30]:
-                buffer = io.BytesIO()
-                img.save(buffer, format='JPEG', quality=quality, optimize=True)
-                if buffer.tell() < max_size:
-                    break
-            buffer.seek(0)
-            image_bytes = buffer.getvalue()
-        
-        return image_bytes
     
     def _draw_centered_text(self, draw, text, x, y, width, height, font, color):
         """绘制居中的文字"""

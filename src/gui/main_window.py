@@ -1,7 +1,7 @@
 """
-Excel数据推送助手 - 主窗口模块
+Excel数据推送助手 - 主窗口模块 (PyQt6版本)
 
-提供Tkinter-based主窗口，包含5个功能区域：
+提供PyQt6-based主窗口，包含5个功能区域：
 1. 文件选择区
 2. 数据预览区
 3. Webhook配置区
@@ -10,20 +10,17 @@ Excel数据推送助手 - 主窗口模块
 """
 
 import sys
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-from typing import Optional, List, Dict, Any
-import threading
-import queue
 from pathlib import Path
+from typing import Optional, List, Dict, Any
 
-# DPI Awareness (Windows only)
-if sys.platform == 'win32':
-    try:
-        import ctypes
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    except:
-        pass  # Old Windows version
+from PyQt6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QLineEdit, QTableWidget, QTableWidgetItem,
+    QProgressBar, QGroupBox, QFileDialog, QMessageBox,
+    QHeaderView, QAbstractItemView, QApplication
+)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QColor
 
 # Import core modules
 try:
@@ -41,22 +38,149 @@ except ImportError:
     from ..core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
 
 
-class MainWindow:
-    """主窗口类 - Excel数据推送助手GUI"""
+class WorkerThread(QThread):
+    """后台工作线程基类"""
+    progress_signal = pyqtSignal(int)
+    status_signal = pyqtSignal(str)
+    error_signal = pyqtSignal(str, str)  # title, message
+    excel_error_signal = pyqtSignal(object)  # ExcelFormatError
+    webhook_error_signal = pyqtSignal(object)  # WeChatAPIError
+    network_error_signal = pyqtSignal(object)  # NetworkError
+    completed_signal = pyqtSignal(bool, str, str)  # success, message, title
+    done_signal = pyqtSignal()
+    update_preview_signal = pyqtSignal()
+    
+    def __init__(self):
+        super().__init__()
+        self._is_running = True
+    
+    def stop(self):
+        self._is_running = False
+
+
+class ExcelLoadThread(WorkerThread):
+    """Excel加载后台线程"""
+    
+    def __init__(self, file_path: Path, excel_reader, column_detector):
+        super().__init__()
+        self.file_path = file_path
+        self.excel_reader = excel_reader
+        self.column_detector = column_detector
+        self.extracted_data = []
+    
+    def run(self):
+        try:
+            self.progress_signal.emit(10)
+            self.status_signal.emit('正在读取Excel文件...')
+            
+            # Read Excel
+            raw_data = self.excel_reader.read(str(self.file_path))
+            
+            self.progress_signal.emit(30)
+            self.status_signal.emit('正在识别列...')
+            
+            if not raw_data or len(raw_data) < 2:
+                self.error_signal.emit('文件错误', 'Excel文件为空或格式不正确')
+                return
+            
+            # Detect columns
+            headers = raw_data[0]
+            column_map = self.column_detector.detect(headers)
+            
+            self.progress_signal.emit(50)
+            self.status_signal.emit('正在提取数据...')
+            
+            # Extract data
+            self.extracted_data = self.column_detector.extract_data(raw_data, column_map)
+            
+            self.progress_signal.emit(90)
+            self.status_signal.emit(f'读取完成，共{len(self.extracted_data)}行数据')
+            
+            self.update_preview_signal.emit()
+            self.progress_signal.emit(100)
+            self.completed_signal.emit(True, f'成功读取{len(self.extracted_data)}行数据', '完成')
+            
+        except ExcelFormatError as e:
+            self.excel_error_signal.emit(e)
+        except Exception as e:
+            self.error_signal.emit('读取错误', f'读取Excel文件失败：{str(e)}')
+        finally:
+            self.done_signal.emit()
+
+
+class SendThread(WorkerThread):
+    """发送消息后台线程"""
+    
+    def __init__(self, webhook_url: str, data: List[Dict], formatter, client_class):
+        super().__init__()
+        self.webhook_url = webhook_url
+        self.data = data
+        self.formatter = formatter
+        self.client_class = client_class
+    
+    def run(self):
+        try:
+            # Create client
+            client = self.client_class(webhook_url=self.webhook_url)
+            
+            self.status_signal.emit('正在发送消息...')
+            self.progress_signal.emit(10)
+            
+            # Format and send
+            markdown = self.formatter.format(self.data)
+            results = client.send_markdown(markdown)
+            
+            # Update progress
+            if results:
+                success_count = sum(1 for r in results if r.get('success'))
+                total_count = len(results)
+                progress = 10 + int(90 * success_count / total_count) if total_count > 0 else 100
+                self.progress_signal.emit(progress)
+            
+            # Check results
+            all_success = all(r.get('success') for r in results)
+            
+            if all_success:
+                total_chunks = len(results)
+                self.completed_signal.emit(
+                    True, 
+                    f'消息发送成功！共发送{total_chunks}片消息',
+                    '发送成功'
+                )
+            else:
+                failed_results = [r for r in results if not r.get('success')]
+                if failed_results:
+                    first_error = failed_results[0].get('error', '未知错误')
+                    self.completed_signal.emit(
+                        False,
+                        f'发送失败：{first_error}',
+                        '发送失败'
+                    )
+        
+        except WeChatAPIError as e:
+            self.webhook_error_signal.emit(e)
+        
+        except NetworkError as e:
+            self.network_error_signal.emit(e)
+        
+        except Exception as e:
+            self.completed_signal.emit(False, f'发送时出错：{str(e)}', '错误')
+        
+        finally:
+            self.progress_signal.emit(100)
+            self.done_signal.emit()
+
+
+class MainWindow(QMainWindow):
+    """主窗口类 - Excel数据推送助手GUI (PyQt6版本)"""
     
     WINDOW_WIDTH = 800
     WINDOW_HEIGHT = 600
     
-    def __init__(self, root=None):
-        """初始化主窗口
-        
-        Args:
-            root: Tk根窗口实例（可选，如果不提供则创建新的）
-        """
-        self.root = root if root else tk.Tk()
-        self.root.title("Excel数据推送助手")
-        self.root.geometry(f"{self.WINDOW_WIDTH}x{self.WINDOW_HEIGHT}")
-        self.root.resizable(False, False)  # D-02: Fixed size
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Excel数据推送助手")
+        self.setFixedSize(self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
         
         # Center window
         self._center_window()
@@ -71,87 +195,75 @@ class MainWindow:
         self.current_file: Optional[Path] = None
         self.current_data: List[Dict] = []
         self.is_processing = False
-        
-        # Threading
-        self.worker_queue = queue.Queue()
-        self._check_queue()
+        self.current_thread: Optional[WorkerThread] = None
+        self.should_retry_send = False
         
         # Build UI
-        self._create_styles()
         self._create_widgets()
         
     def _center_window(self):
-        """居中显示窗口 (D-04)"""
-        self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() // 2) - (self.WINDOW_WIDTH // 2)
-        y = (self.root.winfo_screenheight() // 2) - (self.WINDOW_HEIGHT // 2)
-        self.root.geometry(f"{self.WINDOW_WIDTH}x{self.WINDOW_HEIGHT}+{x}+{y}")
+        """居中显示窗口"""
+        screen = QApplication.primaryScreen().geometry()
+        x = (screen.width() - self.WINDOW_WIDTH) // 2
+        y = (screen.height() - self.WINDOW_HEIGHT) // 2
+        self.move(x, y)
     
     def _show_error(self, title: str, message: str, level: str = 'error', 
-                    suggestion: str = None, show_retry: bool = False):
+                    suggestion: str = None, show_retry: bool = False) -> bool:
         """显示错误信息
         
-        Args:
-            title: 错误标题
-            message: 错误消息
-            level: 错误级别 ('error'弹窗, 'warning'弹窗, 'info'状态栏)
-            suggestion: 解决建议（可选）
-            show_retry: 是否显示重试按钮
+        Returns:
+            True if user chose retry, False otherwise
         """
         full_message = message
         if suggestion:
             full_message = f"{message}\n\n解决建议：{suggestion}"
         
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(full_message)
+        
         if level == 'error':
             if show_retry:
-                # 询问是否重试
-                result = messagebox.askretrycancel(title, full_message)
-                return result  # True=重试, False=取消
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                retry_btn = msg_box.addButton("重试", QMessageBox.ButtonRole.AcceptRole)
+                cancel_btn = msg_box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+                msg_box.exec()
+                return msg_box.clickedButton() == retry_btn
             else:
-                messagebox.showerror(title, full_message)
+                msg_box.setIcon(QMessageBox.Icon.Critical)
+                msg_box.exec()
+                return False
         elif level == 'warning':
-            messagebox.showwarning(title, full_message)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.exec()
+            return False
         else:
             # info级别显示在状态栏
-            self._set_status(full_message, 'error')
+            self.status_label.setText(full_message)
+            self.status_label.setStyleSheet("color: red;")
+            return False
     
     def _handle_network_error(self, error: NetworkError) -> bool:
-        """处理网络错误，返回是否用户选择重试
-        
-        Args:
-            error: NetworkError实例
-            
-        Returns:
-            True if user chose to retry, False otherwise
-        """
+        """处理网络错误，返回是否用户选择重试"""
         message = str(error)
         suggestion = "请检查网络连接，然后点击\"重新发送\"按钮重试。"
         
-        # 提取超时信息
         if 'timeout' in message.lower():
             title = "网络超时"
             suggestion = "网络连接超时，请检查网络连接后点击\"重新发送\"按钮重试。"
         else:
             title = "网络错误"
         
-        return self._show_error(
-            title, message, 
-            level='error', 
-            suggestion=suggestion,
-            show_retry=True
-        )
+        return self._show_error(title, message, level='error', 
+                               suggestion=suggestion, show_retry=True)
     
     def _handle_webhook_error(self, error: WeChatAPIError):
-        """处理webhook配置错误
-        
-        Args:
-            error: WeChatAPIError实例
-        """
+        """处理webhook配置错误"""
         errcode = getattr(error, 'errcode', None)
         message = str(error)
         
         if errcode == 40013:
-            # key无效
             title = "企业微信配置错误"
             suggestion = "webhook地址无效，请检查配置是否正确。可能的原因：\n1. key被复制错误\n2. 机器人已被删除\n3. 机器人被禁用"
         else:
@@ -161,11 +273,7 @@ class MainWindow:
         self._show_error(title, message, level='error', suggestion=suggestion)
     
     def _handle_excel_error(self, error: ExcelFormatError):
-        """处理Excel读取错误
-        
-        Args:
-            error: ExcelFormatError实例
-        """
+        """处理Excel读取错误"""
         message = str(error)
         error_code = getattr(error, 'error_code', None)
         
@@ -180,131 +288,137 @@ class MainWindow:
         
         self._show_error(title, message, level='error')
     
-    def _create_styles(self):
-        """创建ttk样式 (D-31)"""
-        self.style = ttk.Style()
-        # Use default theme, no custom font (D-32: system default font)
-    
     def _create_widgets(self):
-        """创建5个功能区域 (D-01~D-03)"""
-        # Main container with padding
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        """创建5个功能区域"""
+        # Central widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # Main layout
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
         
         # 1. File selection frame
-        self._create_file_frame(main_frame)
+        self._create_file_frame(main_layout)
         
         # 2. Preview frame
-        self._create_preview_frame(main_frame)
+        self._create_preview_frame(main_layout)
         
         # 3. Config frame
-        self._create_config_frame(main_frame)
+        self._create_config_frame(main_layout)
         
         # 4. Send button frame
-        self._create_send_frame(main_frame)
+        self._create_send_frame(main_layout)
         
         # 5. Status frame
-        self._create_status_frame(main_frame)
+        self._create_status_frame(main_layout)
     
-    def _create_file_frame(self, parent):
-        """文件选择区域 (GUI-02)"""
-        frame = ttk.LabelFrame(parent, text="文件选择", padding="5")
-        frame.pack(fill=tk.X, pady=(0, 10))
+    def _create_file_frame(self, parent_layout):
+        """文件选择区域"""
+        group = QGroupBox("文件选择")
+        layout = QHBoxLayout(group)
+        layout.setSpacing(5)
         
-        self.file_path_var = tk.StringVar(value="请选择Excel文件")
-        path_entry = ttk.Entry(frame, textvariable=self.file_path_var, state="readonly")
-        path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.file_path_label = QLabel("请选择Excel文件")
+        self.file_path_label.setStyleSheet("color: gray;")
+        layout.addWidget(self.file_path_label, stretch=1)
         
-        select_btn = ttk.Button(frame, text="选择文件", command=self._on_select_file)
-        select_btn.pack(side=tk.RIGHT)
+        select_btn = QPushButton("选择文件")
+        select_btn.clicked.connect(self._on_select_file)
+        layout.addWidget(select_btn)
+        
+        parent_layout.addWidget(group)
     
-    def _create_preview_frame(self, parent):
-        """数据预览区域 (GUI-03, D-11~D-16)"""
-        frame = ttk.LabelFrame(parent, text="数据预览", padding="5")
-        frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+    def _create_preview_frame(self, parent_layout):
+        """数据预览区域"""
+        group = QGroupBox("数据预览")
+        layout = QVBoxLayout(group)
         
-        # Treeview with scrollbars
-        tree_frame = ttk.Frame(frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Define columns (D-15: 5 target columns)
-        columns = ["日期", "发货人", "提单号", "入库未扫", "出库未扫"]
-        
-        self.preview_tree = ttk.Treeview(
-            tree_frame, 
-            show="headings",
-            columns=columns,
-            height=10  # Show ~10 rows at a time
+        # Table widget
+        self.preview_table = QTableWidget()
+        self.preview_table.setColumnCount(5)
+        self.preview_table.setHorizontalHeaderLabels(
+            ["日期", "发货人", "提单号", "入库未扫", "出库未扫"]
         )
-        self.preview_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.preview_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.preview_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.preview_table.verticalHeader().setVisible(False)
+        self.preview_table.setMaximumHeight(250)
         
-        # Configure column headers and widths (D-13: adaptive column widths)
-        for col in columns:
-            self.preview_tree.heading(col, text=col)
-            self.preview_tree.column(col, width=100, anchor="w")
-        
-        # Vertical scrollbar
-        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.preview_tree.yview)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        self.preview_tree.configure(yscrollcommand=vsb.set)
-        
-        # Horizontal scrollbar (D-14: as needed)
-        hsb = ttk.Scrollbar(frame, orient="horizontal", command=self.preview_tree.xview)
-        hsb.pack(fill=tk.X)
-        self.preview_tree.configure(xscrollcommand=hsb.set)
-        
-        # Alternating row colors (D-16)
-        self.preview_tree.tag_configure('even', background='#f0f0f0')
-        self.preview_tree.tag_configure('odd', background='white')
+        layout.addWidget(self.preview_table)
+        parent_layout.addWidget(group, stretch=1)
     
-    def _create_config_frame(self, parent):
-        """配置区域 (GUI-04, D-28~D-29)"""
-        frame = ttk.LabelFrame(parent, text="企业微信配置", padding="5")
-        frame.pack(fill=tk.X, pady=(0, 10))
+    def _create_config_frame(self, parent_layout):
+        """配置区域"""
+        group = QGroupBox("企业微信配置")
+        layout = QHBoxLayout(group)
+        layout.setSpacing(5)
         
-        ttk.Label(frame, text="Webhook地址：").pack(side=tk.LEFT)
+        layout.addWidget(QLabel("Webhook地址："))
         
-        self.webhook_var = tk.StringVar()
-        self.webhook_entry = ttk.Entry(frame, textvariable=self.webhook_var, width=50)
-        self.webhook_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        self.webhook_entry = QLineEdit()
+        self.webhook_entry.setPlaceholderText("请输入企业微信机器人Webhook地址")
+        self.webhook_entry.textChanged.connect(self._update_send_button)
+        layout.addWidget(self.webhook_entry, stretch=1)
         
-        # Add save button
-        save_btn = ttk.Button(frame, text="保存", command=self._on_save_config, width=6)
-        save_btn.pack(side=tk.LEFT, padx=(5, 0))
-        
-        # Bind webhook change to update button state
-        self.webhook_var.trace_add('write', self._on_webhook_changed)
+        save_btn = QPushButton("保存")
+        save_btn.clicked.connect(self._on_save_config)
+        save_btn.setFixedWidth(60)
+        layout.addWidget(save_btn)
         
         # Load existing config
         existing_url = self.config_store.get_webhook_url()
         if existing_url:
-            self.webhook_var.set(existing_url)
-
-    def _on_webhook_changed(self, *args):
-        """webhook地址改变时更新按钮状态"""
-        self._update_send_button()
-
-    def _on_save_config(self):
-        """保存webhook配置"""
-        webhook_url = self.webhook_var.get().strip()
+            self.webhook_entry.setText(existing_url)
         
-        if not webhook_url:
-            messagebox.showwarning("配置错误", "请输入webhook地址")
-            return
+        parent_layout.addWidget(group)
+    
+    def _create_send_frame(self, parent_layout):
+        """发送按钮区域"""
+        frame = QWidget()
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(0, 0, 0, 0)
         
-        try:
-            self.config_store.set_webhook_url(webhook_url)
-            self.status_var.set("配置已保存")
-            self._set_status_color("success")  # D-26: green for success
-            self._update_send_button()
-        except Exception as e:
-            messagebox.showerror("保存失败", f"保存配置时出错：{str(e)}")
-
+        self.send_btn = QPushButton("发送消息")
+        self.send_btn.setEnabled(False)
+        self.send_btn.clicked.connect(self._on_send)
+        self.send_btn.setFixedWidth(100)
+        layout.addStretch()
+        layout.addWidget(self.send_btn)
+        layout.addStretch()
+        
+        parent_layout.addWidget(frame)
+    
+    def _create_status_frame(self, parent_layout):
+        """状态栏区域"""
+        group = QGroupBox("状态")
+        layout = QVBoxLayout(group)
+        
+        self.status_label = QLabel("准备就绪")
+        layout.addWidget(self.status_label)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
+        
+        parent_layout.addWidget(group)
+    
+    def _update_send_button(self):
+        """更新发送按钮状态"""
+        has_file = self.current_file is not None
+        has_data = len(self.current_data) > 0
+        has_webhook = bool(self.webhook_entry.text().strip())
+        not_processing = not self.is_processing
+        
+        self.send_btn.setEnabled(
+            has_file and has_data and has_webhook and not_processing
+        )
+    
     def _set_status_color(self, state: str):
-        """设置状态文字颜色 (D-26: color-coded status)
-        
-        state: 'default' | 'processing' | 'success' | 'error'
-        """
+        """设置状态文字颜色"""
         colors = {
             'default': 'black',
             'processing': 'blue',
@@ -312,281 +426,127 @@ class MainWindow:
             'error': 'red'
         }
         color = colors.get(state, 'black')
-        
-        # Update label foreground color
-        self.status_label.configure(foreground=color)
-    
-    def _create_send_frame(self, parent):
-        """发送按钮区域 (GUI-05, D-30)"""
-        frame = ttk.Frame(parent)
-        frame.pack(fill=tk.X, pady=(0, 10))
-        
-        self.send_btn = ttk.Button(
-            frame, 
-            text="发送消息", 
-            command=self._on_send,
-            state="disabled"  # D-30: Disabled by default
-        )
-        self.send_btn.pack()
-    
-    def _create_status_frame(self, parent):
-        """状态栏区域 (GUI-06, D-22~D-27)"""
-        frame = ttk.LabelFrame(parent, text="状态", padding="5")
-        frame.pack(fill=tk.X)
-        
-        # Status text line 1 - Store reference to label
-        self.status_var = tk.StringVar(value="准备就绪")
-        self.status_label = ttk.Label(
-            frame, 
-            textvariable=self.status_var,
-            foreground="black"  # D-26: default black
-        )
-        self.status_label.pack(anchor=tk.W)
-        
-        # Progress bar line 2 (D-22: determinate progress bar)
-        self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ttk.Progressbar(
-            frame, 
-            variable=self.progress_var,
-            mode='determinate',
-            maximum=100,
-            length=760
-        )
-        self.progress_bar.pack(fill=tk.X, pady=(5, 0))
-    
-    def _check_queue(self):
-        """检查后台线程队列 (D-09: after() polling)"""
-        try:
-            while True:
-                msg = self.worker_queue.get_nowait()
-                self._handle_worker_message(msg)
-        except queue.Empty:
-            pass
-        finally:
-            self.root.after(100, self._check_queue)  # Check every 100ms
-    
-    def _handle_worker_message(self, msg: Dict):
-        """处理后台线程消息 (D-09: main thread handles UI updates)"""
-        msg_type = msg.get('type')
-        
-        if msg_type == 'progress':
-            self.progress_var.set(msg.get('value', 0))
-        
-        elif msg_type == 'status':
-            self.status_var.set(msg.get('text', ''))
-        
-        elif msg_type == 'error':
-            # Show error dialog (D-17: serious errors show popup)
-            self.is_processing = False
-            self._update_send_button()
-            self.progress_var.set(0)
-            self._set_status_color("error")  # D-26: red for error
-            messagebox.showerror(
-                msg.get('title', '错误'),
-                msg.get('message', '发生未知错误')
-            )
-        
-        elif msg_type == 'excel_error':
-            # Handle ExcelFormatError
-            self.is_processing = False
-            self._update_send_button()
-            self.progress_var.set(0)
-            self._set_status_color("error")
-            error = msg.get('error')
-            if error:
-                self._handle_excel_error(error)
-        
-        elif msg_type == 'webhook_error':
-            # Handle WeChatAPIError
-            self.is_processing = False
-            self._update_send_button()
-            self.progress_var.set(100)
-            self._set_status_color("error")
-            error = msg.get('error')
-            if error:
-                self._handle_webhook_error(error)
-        
-        elif msg_type == 'network_error':
-            # Handle NetworkError with retry option
-            self.is_processing = False
-            self._update_send_button()
-            self.progress_var.set(100)
-            self._set_status_color("error")
-            error = msg.get('error')
-            if error:
-                should_retry = self._handle_network_error(error)
-                if should_retry:
-                    # User chose to retry
-                    self.root.after(100, lambda: self._on_send())
-        
-        elif msg_type == 'update_preview':
-            # Update the preview tree
-            self._update_preview()
-            self._update_send_button()  # Re-check if send button should be enabled
-        
-        elif msg_type == 'send_complete':
-            # Handle send completion
-            self.is_processing = False
-            self._update_send_button()
-            self.progress_var.set(100)
-            
-            if msg.get('success'):
-                # Success - show info dialog (D-18: popup for important status)
-                self._set_status_color("success")  # D-26: green
-                self.status_var.set(msg.get('message', '发送成功'))
-                messagebox.showinfo(
-                    msg.get('title', '完成'),
-                    msg.get('message', '操作完成')
-                )
-            else:
-                # Failure - show error dialog (D-17: popup for errors)
-                self._set_status_color("error")  # D-26: red
-                self.status_var.set(msg.get('message', '发送失败'))
-                messagebox.showerror(
-                    msg.get('title', '错误'),
-                    msg.get('message', '发送失败')
-                )
-        
-        elif msg_type == 'done':
-            self.is_processing = False
-            self._update_send_button()
-    
-    def _update_send_button(self):
-        """更新发送按钮状态 (D-30: enable conditions)"""
-        # Enable if: file selected AND data loaded AND webhook configured AND not processing
-        has_file = self.current_file is not None
-        has_data = len(self.current_data) > 0
-        has_webhook = bool(self.webhook_var.get().strip())
-        not_processing = not self.is_processing
-        
-        if has_file and has_data and has_webhook and not_processing:
-            self.send_btn.config(state="normal")
-        else:
-            self.send_btn.config(state="disabled")
+        self.status_label.setStyleSheet(f"color: {color};")
     
     def _on_select_file(self):
-        """处理文件选择按钮点击 (D-28)"""
-        # Get last folder from config
+        """处理文件选择按钮点击"""
         last_folder = self.config_store.get_last_folder()
         if not last_folder or not Path(last_folder).exists():
             last_folder = str(Path.home() / "Documents")
         
-        # Open file dialog
-        file_path = filedialog.askopenfilename(
-            title="选择Excel文件",
-            initialdir=last_folder,
-            filetypes=[
-                ("Excel文件", "*.xlsx *.xls"),
-                ("Excel 2007+", "*.xlsx"),
-                ("Excel 97-2003", "*.xls"),
-                ("所有文件", "*.*")
-            ]
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择Excel文件",
+            last_folder,
+            "Excel文件 (*.xlsx *.xls);;Excel 2007+ (*.xlsx);;Excel 97-2003 (*.xls);;所有文件 (*.*)"
         )
         
         if not file_path:
-            return  # User cancelled
+            return
         
-        # Update path display
-        self.file_path_var.set(file_path)
+        self.file_path_label.setText(file_path)
+        self.file_path_label.setStyleSheet("color: black;")
         self.current_file = Path(file_path)
         
-        # Save folder to config
         self.config_store.set_last_folder(str(self.current_file.parent))
         
-        # Start background loading (D-05)
         self._start_loading()
-
+    
     def _start_loading(self):
         """开始加载Excel文件"""
         self.is_processing = True
         self._update_send_button()
-        self.status_var.set("正在读取Excel文件...")
-        self.progress_var.set(0)
-        self._set_status_color("processing")  # D-26: blue for processing
+        self.status_label.setText("正在读取Excel文件...")
+        self.status_label.setStyleSheet("color: blue;")
+        self.progress_bar.setValue(0)
         
-        # Start background thread (D-05, D-06)
-        thread = threading.Thread(target=self._load_excel_thread, daemon=True)
-        thread.start()
-
-    def _load_excel_thread(self):
-        """后台线程：读取Excel文件 (D-05)"""
-        try:
-            if not self.current_file:
-                return
-            
-            # Update progress via queue
-            self.worker_queue.put({'type': 'progress', 'value': 10})
-            self.worker_queue.put({'type': 'status', 'text': '正在读取Excel文件...'})
-            
-            # Read Excel (Phase 1 component)
-            raw_data = self.excel_reader.read(str(self.current_file))
-            
-            self.worker_queue.put({'type': 'progress', 'value': 30})
-            self.worker_queue.put({'type': 'status', 'text': '正在识别列...'})
-            
-            if not raw_data or len(raw_data) < 2:
-                self.worker_queue.put({
-                    'type': 'error',
-                    'message': 'Excel文件为空或格式不正确',
-                    'title': '文件错误'
-                })
-                return
-            
-            # Detect columns (Phase 1 component)
-            headers = raw_data[0]
-            column_map = self.column_detector.detect(headers)
-            
-            self.worker_queue.put({'type': 'progress', 'value': 50})
-            self.worker_queue.put({'type': 'status', 'text': '正在提取数据...'})
-            
-            # Extract data
-            extracted = self.column_detector.extract_data(raw_data, column_map)
-            
-            self.worker_queue.put({'type': 'progress', 'value': 70})
-            self.worker_queue.put({'type': 'status', 'text': '正在准备预览...'})
-            
-            # Store data
-            self.current_data = extracted
-            
-            self.worker_queue.put({'type': 'progress', 'value': 90})
-            self.worker_queue.put({
-                'type': 'status', 
-                'text': f'读取完成，共{len(extracted)}行数据'
-            })
-            
-            # Signal to update preview
-            self.worker_queue.put({'type': 'update_preview'})
-            self.worker_queue.put({'type': 'progress', 'value': 100})
-            
-        except ExcelFormatError as e:
-            self.worker_queue.put({
-                'type': 'excel_error',
-                'error': e,
-                'title': 'Excel文件错误'
-            })
-        except Exception as e:
-            self.worker_queue.put({
-                'type': 'error',
-                'message': f'读取Excel文件失败：{str(e)}',
-                'title': '读取错误'
-            })
-        finally:
-            self.worker_queue.put({'type': 'done'})
-
+        # Create and start thread
+        self.current_thread = ExcelLoadThread(
+            self.current_file,
+            self.excel_reader,
+            self.column_detector
+        )
+        
+        # Connect signals
+        self.current_thread.progress_signal.connect(self.progress_bar.setValue)
+        self.current_thread.status_signal.connect(self.status_label.setText)
+        self.current_thread.error_signal.connect(self._on_error)
+        self.current_thread.excel_error_signal.connect(self._on_excel_error)
+        self.current_thread.update_preview_signal.connect(self._update_preview)
+        self.current_thread.completed_signal.connect(self._on_task_completed)
+        self.current_thread.done_signal.connect(self._on_task_done)
+        
+        self.current_thread.start()
+    
+    def _on_error(self, title: str, message: str):
+        """处理错误信号"""
+        self.is_processing = False
+        self._update_send_button()
+        self.progress_bar.setValue(0)
+        self._set_status_color('error')
+        QMessageBox.critical(self, title, message)
+    
+    def _on_excel_error(self, error):
+        """处理Excel错误信号"""
+        self.is_processing = False
+        self._update_send_button()
+        self.progress_bar.setValue(0)
+        self._set_status_color('error')
+        self._handle_excel_error(error)
+    
+    def _on_webhook_error(self, error):
+        """处理webhook错误信号"""
+        self.is_processing = False
+        self._update_send_button()
+        self.progress_bar.setValue(100)
+        self._set_status_color('error')
+        self._handle_webhook_error(error)
+    
+    def _on_network_error(self, error):
+        """处理网络错误信号"""
+        self.is_processing = False
+        self._update_send_button()
+        self.progress_bar.setValue(100)
+        self._set_status_color('error')
+        
+        should_retry = self._handle_network_error(error)
+        if should_retry:
+            QTimer.singleShot(100, self._on_send)
+    
+    def _on_task_completed(self, success: bool, message: str, title: str):
+        """处理任务完成信号"""
+        self.is_processing = False
+        self._update_send_button()
+        self.progress_bar.setValue(100)
+        
+        if success:
+            self._set_status_color('success')
+            self.status_label.setText(message)
+            QMessageBox.information(self, title, message)
+        else:
+            self._set_status_color('error')
+            self.status_label.setText(message)
+            QMessageBox.critical(self, title, message)
+    
+    def _on_task_done(self):
+        """处理任务结束信号"""
+        self.is_processing = False
+        self._update_send_button()
+        if self.current_thread:
+            self.current_thread = None
+    
     def _update_preview(self):
-        """更新预览表格 (D-12: show 20 rows)"""
-        # Clear existing data
-        for item in self.preview_tree.get_children():
-            self.preview_tree.delete(item)
+        """更新预览表格"""
+        self.preview_table.setRowCount(0)
         
         if not self.current_data:
             return
         
-        # Show up to 20 rows (D-12: increased from Phase 1's 10)
-        max_rows = 20
-        display_data = self.current_data[:max_rows]
+        # Show up to 20 rows
+        max_rows = min(20, len(self.current_data))
+        self.preview_table.setRowCount(max_rows)
         
-        for i, row in enumerate(display_data):
+        for i, row in enumerate(self.current_data[:max_rows]):
             values = [
                 row.get('日期', '-'),
                 row.get('发货人', '-'),
@@ -595,141 +555,77 @@ class MainWindow:
                 row.get('出库未扫', '-')
             ]
             
-            # Alternating row colors (D-16)
-            tag = 'even' if i % 2 == 0 else 'odd'
-            self.preview_tree.insert('', 'end', values=values, tags=(tag,))
+            for j, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                # Alternating row colors
+                if i % 2 == 0:
+                    item.setBackground(QColor(240, 240, 240))
+                self.preview_table.setItem(i, j, item)
         
-        # Adjust column widths based on content (D-13)
-        self._adjust_column_widths()
-
-    def _adjust_column_widths(self):
-        """根据内容自适应调整列宽 (D-13)"""
-        for col in self.preview_tree['columns']:
-            # Get max width needed
-            header_width = len(col) * 15  # Estimate header width
-            
-            max_content_width = header_width
-            for item in self.preview_tree.get_children():
-                cell_value = self.preview_tree.set(item, col)
-                cell_width = len(str(cell_value)) * 10
-                max_content_width = max(max_content_width, cell_width)
-            
-            # Set width with some padding
-            self.preview_tree.column(col, width=min(max_content_width + 20, 200))
-
-    def _on_send(self):
-        """处理发送按钮点击 (D-06: background thread)"""
-        webhook_url = self.webhook_var.get().strip()
+        self._update_send_button()
+    
+    def _on_save_config(self):
+        """保存webhook配置"""
+        webhook_url = self.webhook_entry.text().strip()
         
         if not webhook_url:
-            messagebox.showerror("配置错误", "请先配置webhook地址")
+            QMessageBox.warning(self, "配置错误", "请输入webhook地址")
+            return
+        
+        try:
+            self.config_store.set_webhook_url(webhook_url)
+            self.status_label.setText("配置已保存")
+            self._set_status_color('success')
+            self._update_send_button()
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"保存配置时出错：{str(e)}")
+    
+    def _on_send(self):
+        """处理发送按钮点击"""
+        webhook_url = self.webhook_entry.text().strip()
+        
+        if not webhook_url:
+            QMessageBox.critical(self, "配置错误", "请先配置webhook地址")
             return
         
         if not self.current_data:
-            messagebox.showerror("数据错误", "请先选择并加载Excel文件")
+            QMessageBox.critical(self, "数据错误", "请先选择并加载Excel文件")
             return
         
-        # Confirm send
         total_rows = len(self.current_data)
-        confirm = messagebox.askyesno(
+        reply = QMessageBox.question(
+            self,
             "确认发送",
-            f"确定要发送 {total_rows} 行数据到企业微信吗？"
+            f"确定要发送 {total_rows} 行数据到企业微信吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        if not confirm:
+        
+        if reply != QMessageBox.StandardButton.Yes:
             return
         
-        # Start sending
         self._start_sending(webhook_url)
-
+    
     def _start_sending(self, webhook_url: str):
         """开始发送消息"""
         self.is_processing = True
         self._update_send_button()
-        self.progress_var.set(0)
-        self._set_status_color("processing")  # D-26: blue for processing
+        self.progress_bar.setValue(0)
+        self._set_status_color('processing')
         
-        # Format data to markdown
-        self.worker_queue.put({'type': 'status', 'text': '正在格式化数据...'})
-        markdown = self.formatter.format(self.current_data)
-        
-        # Start background thread (D-06)
-        thread = threading.Thread(
-            target=self._send_thread,
-            args=(webhook_url, markdown),
-            daemon=True
+        # Create and start thread
+        self.current_thread = SendThread(
+            webhook_url,
+            self.current_data,
+            self.formatter,
+            WeChatWorkClient
         )
-        thread.start()
-
-    def _send_thread(self, webhook_url: str, markdown: str):
-        """后台线程：发送消息到企业微信 (D-06)"""
-        try:
-            # Create client
-            client = WeChatWorkClient(webhook_url=webhook_url)
-            
-            # Count chunks for progress (Phase 2 client splits automatically)
-            # We need to estimate or get from client
-            self.worker_queue.put({'type': 'status', 'text': '正在发送消息...'})
-            self.worker_queue.put({'type': 'progress', 'value': 10})
-            
-            # Send message
-            # Note: WeChatWorkClient.send_markdown handles splitting internally
-            # and returns results for each chunk
-            results = client.send_markdown(markdown)
-            
-            # Update progress based on results
-            if results:
-                success_count = sum(1 for r in results if r.get('success'))
-                total_count = len(results)
-                progress = 10 + int(90 * success_count / total_count) if total_count > 0 else 100
-                self.worker_queue.put({'type': 'progress', 'value': progress})
-            
-            # Check results
-            all_success = all(r.get('success') for r in results)
-            
-            if all_success:
-                total_chunks = len(results)
-                self.worker_queue.put({
-                    'type': 'send_complete',
-                    'success': True,
-                    'message': f'消息发送成功！共发送{total_chunks}片消息',
-                    'title': '发送成功'
-                })
-            else:
-                # Find first error
-                failed_results = [r for r in results if not r.get('success')]
-                if failed_results:
-                    first_error = failed_results[0].get('error', '未知错误')
-                    self.worker_queue.put({
-                        'type': 'send_complete',
-                        'success': False,
-                        'message': f'发送失败：{first_error}',
-                        'title': '发送失败'
-                    })
         
-        except WeChatAPIError as e:
-            self.worker_queue.put({
-                'type': 'webhook_error',
-                'error': e
-            })
+        # Connect signals
+        self.current_thread.progress_signal.connect(self.progress_bar.setValue)
+        self.current_thread.status_signal.connect(self.status_label.setText)
+        self.current_thread.webhook_error_signal.connect(self._on_webhook_error)
+        self.current_thread.network_error_signal.connect(self._on_network_error)
+        self.current_thread.completed_signal.connect(self._on_task_completed)
+        self.current_thread.done_signal.connect(self._on_task_done)
         
-        except NetworkError as e:
-            self.worker_queue.put({
-                'type': 'network_error',
-                'error': e
-            })
-        
-        except Exception as e:
-            self.worker_queue.put({
-                'type': 'send_complete',
-                'success': False,
-                'message': f'发送时出错：{str(e)}',
-                'title': '错误'
-            })
-        
-        finally:
-            self.worker_queue.put({'type': 'progress', 'value': 100})
-            self.worker_queue.put({'type': 'done'})
-    
-    def run(self):
-        """启动主循环"""
-        self.root.mainloop()
+        self.current_thread.start()

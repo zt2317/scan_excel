@@ -48,7 +48,7 @@ class WorkerThread(QThread):
     network_error_signal = pyqtSignal(object)  # NetworkError
     completed_signal = pyqtSignal(bool, str, str)  # success, message, title
     done_signal = pyqtSignal()
-    update_preview_signal = pyqtSignal()
+    update_preview_signal = pyqtSignal(list)  # data
     
     def __init__(self):
         super().__init__()
@@ -96,7 +96,8 @@ class ExcelLoadThread(WorkerThread):
             self.progress_signal.emit(90)
             self.status_signal.emit(f'读取完成，共{len(self.extracted_data)}行数据')
             
-            self.update_preview_signal.emit()
+            # Pass data back via signal
+            self.update_preview_signal.emit(self.extracted_data)
             self.progress_signal.emit(100)
             self.completed_signal.emit(True, f'成功读取{len(self.extracted_data)}行数据', '完成')
             
@@ -305,11 +306,11 @@ class MainWindow(QMainWindow):
         # 2. Preview frame
         self._create_preview_frame(main_layout)
         
-        # 3. Config frame
-        self._create_config_frame(main_layout)
-        
-        # 4. Send button frame
+        # 3. Send button frame (create before config to ensure send_btn exists)
         self._create_send_frame(main_layout)
+        
+        # 4. Config frame
+        self._create_config_frame(main_layout)
         
         # 5. Status frame
         self._create_status_frame(main_layout)
@@ -535,11 +536,16 @@ class MainWindow(QMainWindow):
         if self.current_thread:
             self.current_thread = None
     
-    def _update_preview(self):
+    def _update_preview(self, data: list):
         """更新预览表格"""
+        # Store the data
+        self.current_data = data
+        
+        # Clear table
         self.preview_table.setRowCount(0)
         
         if not self.current_data:
+            self._update_send_button()
             return
         
         # Show up to 20 rows

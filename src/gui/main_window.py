@@ -110,8 +110,6 @@ class ExcelLoadThread(WorkerThread):
             self.error_signal.emit('读取错误', f'读取Excel文件失败：{str(e)}')
         finally:
             self.done_signal.emit()
-        finally:
-            self.done_signal.emit()
 
 
 class SendThread(WorkerThread):

@@ -175,7 +175,7 @@ class ImageGenerator:
         draw.text((text_x, text_y), text, fill=color, font=font)
     
     def _draw_multiline_text(self, draw, text, x, y, max_width, max_height, font, color):
-        """绘制多行文字"""
+        """绘制多行文字，自动换行防止写出格子"""
         lines = text.split('\n')
         line_height = 20
         current_y = y
@@ -183,8 +183,29 @@ class ImageGenerator:
         for line in lines:
             if current_y + line_height > y + max_height:
                 break
-            draw.text((x, current_y), line, fill=color, font=font)
+            
+            # 检查文字宽度，如果太长则截断
+            bbox = draw.textbbox((0, 0), line, font=font)
+            text_width = bbox[2] - bbox[0]
+            
+            if text_width > max_width:
+                # 文字太长，需要截断并加省略号
+                truncated_line = self._truncate_text(draw, line, max_width - 10, font)  # 留10px给"..."
+                draw.text((x, current_y), truncated_line + "...", fill=color, font=font)
+            else:
+                draw.text((x, current_y), line, fill=color, font=font)
+            
             current_y += line_height
+    
+    def _truncate_text(self, draw, text, max_width, font):
+        """截断文字到指定宽度"""
+        # 逐字符检查宽度
+        for i in range(len(text), 0, -1):
+            bbox = draw.textbbox((0, 0), text[:i], font=font)
+            text_width = bbox[2] - bbox[0]
+            if text_width <= max_width:
+                return text[:i]
+        return text[:1] if text else ""
     
     def _format_date(self, value: Any) -> str:
         """格式化日期"""

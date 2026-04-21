@@ -29,6 +29,7 @@ try:
         generate_preview, ConfigStore, WeChatWorkClient
     )
     from core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
+    from core.image_generator import ImageGenerator
 except ImportError:
     # Fallback for relative imports when running as module
     from ..core import (
@@ -36,6 +37,7 @@ except ImportError:
         generate_preview, ConfigStore, WeChatWorkClient
     )
     from ..core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
+    from ..core.image_generator import ImageGenerator
 
 
 class WorkerThread(QThread):
@@ -112,11 +114,10 @@ class ExcelLoadThread(WorkerThread):
 class SendThread(WorkerThread):
     """发送消息后台线程"""
     
-    def __init__(self, webhook_url: str, data: List[Dict], formatter, client_class):
+    def __init__(self, webhook_url: str, data: List[Dict], client_class):
         super().__init__()
         self.webhook_url = webhook_url
         self.data = data
-        self.formatter = formatter
         self.client_class = client_class
     
     def run(self):
@@ -124,39 +125,34 @@ class SendThread(WorkerThread):
             # Create client
             client = self.client_class(webhook_url=self.webhook_url)
             
-            self.status_signal.emit('正在发送消息...')
+            self.status_signal.emit('正在生成图片...')
             self.progress_signal.emit(10)
             
-            # Format and send
-            markdown = self.formatter.format(self.data)
-            results = client.send_markdown(markdown)
+            # Generate image
+            image_gen = ImageGenerator()
+            image_bytes = image_gen.generate_table_image(self.data)
             
-            # Update progress
-            if results:
-                success_count = sum(1 for r in results if r.get('success'))
-                total_count = len(results)
-                progress = 10 + int(90 * success_count / total_count) if total_count > 0 else 100
-                self.progress_signal.emit(progress)
+            self.status_signal.emit('正在发送图片...')
+            self.progress_signal.emit(50)
             
-            # Check results
-            all_success = all(r.get('success') for r in results)
+            # Send image
+            result = client.send_image(image_bytes)
             
-            if all_success:
-                total_chunks = len(results)
+            self.progress_signal.emit(100)
+            
+            if result.get('success'):
                 self.completed_signal.emit(
                     True, 
-                    f'消息发送成功！共发送{total_chunks}片消息',
+                    '图片发送成功！',
                     '发送成功'
                 )
             else:
-                failed_results = [r for r in results if not r.get('success')]
-                if failed_results:
-                    first_error = failed_results[0].get('error', '未知错误')
-                    self.completed_signal.emit(
-                        False,
-                        f'发送失败：{first_error}',
-                        '发送失败'
-                    )
+                error = result.get('error', '未知错误')
+                self.completed_signal.emit(
+                    False,
+                    f'发送失败：{error}',
+                    '发送失败'
+                )
         
         except WeChatAPIError as e:
             self.webhook_error_signal.emit(e)
@@ -168,7 +164,6 @@ class SendThread(WorkerThread):
             self.completed_signal.emit(False, f'发送时出错：{str(e)}', '错误')
         
         finally:
-            self.progress_signal.emit(100)
             self.done_signal.emit()
 
 
@@ -349,6 +344,12 @@ class MainWindow(QMainWindow):
         # Enable scroll bars for all data
         self.preview_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.preview_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Enable word wrap for multiline content
+        self.preview_table.setWordWrap(True)
+        # Auto-adjust row height
+        self.preview_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        # Set default row height
+        self.preview_table.verticalHeader().setDefaultSectionSize(40)
         
         layout.addWidget(self.preview_table)
         parent_layout.addWidget(group, stretch=1)
@@ -634,7 +635,6 @@ class MainWindow(QMainWindow):
         self.current_thread = SendThread(
             webhook_url,
             self.current_data,
-            self.formatter,
             WeChatWorkClient
         )
         

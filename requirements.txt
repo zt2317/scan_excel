@@ -3,6 +3,7 @@ xlrd>=2.0.1
 requests>=2.31.0
 pyinstaller>=6.0.0
 PyQt6>=6.4.0
+Pillow>=10.0.0
 
 # Testing
 pytest>=7.4.0

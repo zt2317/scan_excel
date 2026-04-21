@@ -71,6 +71,34 @@ class WeChatWorkClient:
             if not self.webhook_url:
                 raise ConfigError("未配置webhook地址，请先设置企业微信机器人")
     
+    def send_image(self, image_bytes: bytes) -> Dict[str, Any]:
+        """发送图片消息
+        
+        Args:
+            image_bytes: 图片字节数据
+            
+        Returns:
+            发送结果字典
+        """
+        import base64
+        import hashlib
+        
+        # 将图片转为base64
+        base64_data = base64.b64encode(image_bytes).decode('utf-8')
+        md5 = hashlib.md5(image_bytes).hexdigest()
+        
+        # 构建请求体
+        payload = {
+            "msgtype": "image",
+            "image": {
+                "base64": base64_data,
+                "md5": md5
+            }
+        }
+        
+        # 发送（带重试）
+        return self._send_with_retry(payload, 1, 1)
+    
     def send_markdown(self, markdown_text: str) -> List[Dict[str, Any]]:
         """发送Markdown消息
         

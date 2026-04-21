@@ -10,7 +10,7 @@
 | 1 | Excel处理 | 读取并解析Excel数据 | EXCL-01~05, MD-01~03 | **✓ Complete** |
 | 2 | 企业微信集成 | 实现消息推送功能 | WX-01~06 | **✓ Complete** |
 | 3 | GUI界面 | 构建用户界面 | GUI-01~06 | **Planning Complete** |
-| 4 | 错误处理 | 健壮的错误处理 | ERR-01~03 | Pending |
+| 4 | 错误处理 | 健壮的错误处理 | ERR-01~03 | **Planning Complete** |
 | 5 | 打包发布 | Windows可执行文件 | - | Pending |
 
 ---
@@ -140,19 +140,29 @@
 - ERR-03: webhook无效提示
 
 **Success Criteria:**
-1. 所有错误都有清晰的中文提示
-2. 不暴露技术细节给用户
-3. 提供解决建议
-4. 异常情况应用不崩溃
+1. ✓ 所有错误都有清晰的中文提示
+2. ✓ 不暴露技术细节给用户
+3. ✓ 提供解决建议
+4. ✓ 异常情况应用不崩溃
 
-**Build Order:**
-1. 定义错误类型和消息
-2. 包装Excel读取错误
-3. 包装网络错误
-4. 添加全局异常处理
-5. 错误场景测试
+**Plans:** 2 plans | **Status:** Complete
+
+**Plan List:**
+- [x] **04-01** — Excel format error handling (ExcelFormatError class, Chinese error messages) ([SUMMARY](phases/04-error-handling/04-01-SUMMARY.md))
+- [x] **04-02** — GUI error integration (Network retry, webhook validation, global exception handler) ([SUMMARY](phases/04-error-handling/04-02-SUMMARY.md))
+
+**Wave Structure:**
+- Wave 1: 04-01 (Error types - no dependencies)
+- Wave 2: 04-02 (GUI integration - depends on 04-01)
 
 **Dependencies:** Phase 1, Phase 2, Phase 3
+
+**Canonical refs:**
+- `.planning/phases/04-error-handling/04-CONTEXT.md` - Phase 4决策
+- `src/core/exceptions.py` - 现有异常类
+- `src/core/excel_reader.py` - Excel读取错误点
+- `src/core/wechat_client.py` - 网络/API错误点
+- `src/gui/main_window.py` - GUI错误显示
 
 ---
 
@@ -194,7 +204,7 @@
 | MD-01~03 | Phase 1 | **✓ Complete** |
 | WX-01~06 | Phase 2 | **✓ Complete** |
 | GUI-01~06 | Phase 3 | Ready to execute |
-| ERR-01~03 | Phase 4 | Pending |
+| ERR-01~03 | Phase 4 | **Planning Complete** |
 
 **Total Phases:** 5
 **Total Requirements:** 15
@@ -214,4 +224,4 @@
 
 ---
 
-*Last updated: 2026-04-20 after Phase 3 planning complete*
+*Last updated: 2026-04-20 after Phase 4 planning complete*

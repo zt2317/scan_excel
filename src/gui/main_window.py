@@ -50,7 +50,7 @@ class WorkerThread(QThread):
     network_error_signal = pyqtSignal(object)  # NetworkError
     completed_signal = pyqtSignal(bool, str, str)  # success, message, title
     done_signal = pyqtSignal()
-    update_preview_signal = pyqtSignal(list)  # data
+    update_preview_signal = pyqtSignal(list, str)  # data, sheet_name
     
     def __init__(self):
         super().__init__()
@@ -69,14 +69,15 @@ class ExcelLoadThread(WorkerThread):
         self.excel_reader = excel_reader
         self.column_detector = column_detector
         self.extracted_data = []
+        self.sheet_name = ""
     
     def run(self):
         try:
             self.progress_signal.emit(10)
             self.status_signal.emit('正在读取Excel文件...')
             
-            # Read Excel
-            raw_data = self.excel_reader.read(str(self.file_path))
+            # Read Excel (返回数据和sheet名称)
+            raw_data, self.sheet_name = self.excel_reader.read(str(self.file_path))
             
             self.progress_signal.emit(30)
             self.status_signal.emit('正在识别列...')
@@ -98,8 +99,8 @@ class ExcelLoadThread(WorkerThread):
             self.progress_signal.emit(90)
             self.status_signal.emit(f'读取完成，共{len(self.extracted_data)}行数据')
             
-            # Pass data back via signal
-            self.update_preview_signal.emit(self.extracted_data)
+            # Pass data and sheet_name back via signal
+            self.update_preview_signal.emit(self.extracted_data, self.sheet_name)
             self.progress_signal.emit(100)
             self.completed_signal.emit(True, f'成功读取{len(self.extracted_data)}行数据', '完成')
             
@@ -109,16 +110,19 @@ class ExcelLoadThread(WorkerThread):
             self.error_signal.emit('读取错误', f'读取Excel文件失败：{str(e)}')
         finally:
             self.done_signal.emit()
+        finally:
+            self.done_signal.emit()
 
 
 class SendThread(WorkerThread):
     """发送消息后台线程"""
     
-    def __init__(self, webhook_url: str, data: List[Dict], client_class):
+    def __init__(self, webhook_url: str, data: List[Dict], client_class, sheet_name: str = ""):
         super().__init__()
         self.webhook_url = webhook_url
         self.data = data
         self.client_class = client_class
+        self.sheet_name = sheet_name
     
     def run(self):
         try:
@@ -128,9 +132,9 @@ class SendThread(WorkerThread):
             self.status_signal.emit('正在生成图片...')
             self.progress_signal.emit(10)
             
-            # Generate images (batched)
+            # Generate images (batched) with sheet_name
             image_gen = ImageGenerator()
-            image_bytes_list = image_gen.generate_table_images(self.data)
+            image_bytes_list = image_gen.generate_table_images(self.data, self.sheet_name)
             total_images = len(image_bytes_list)
             
             self.status_signal.emit(f'生成{total_images}张图片，开始发送...')
@@ -211,6 +215,7 @@ class MainWindow(QMainWindow):
         # State
         self.current_file: Optional[Path] = None
         self.current_data: List[Dict] = []
+        self.current_sheet_name: str = ""
         self.is_processing = False
         self.current_thread: Optional[WorkerThread] = None
         self.should_retry_send = False
@@ -560,10 +565,11 @@ class MainWindow(QMainWindow):
         if self.current_thread:
             self.current_thread = None
     
-    def _update_preview(self, data: list):
-        """更新预览表格 - 显示所有数据"""
-        # Store the data
+    def _update_preview(self, data: list, sheet_name: str):
+        """更新预览表格"""
+        # Store the data and sheet_name
         self.current_data = data
+        self.current_sheet_name = sheet_name  # 存储sheet名称
         
         # Clear table
         self.preview_table.setRowCount(0)
@@ -656,7 +662,8 @@ class MainWindow(QMainWindow):
         self.current_thread = SendThread(
             webhook_url,
             self.current_data,
-            WeChatWorkClient
+            WeChatWorkClient,
+            self.current_sheet_name  # 传递 sheet 名称
         )
         
         # Connect signals

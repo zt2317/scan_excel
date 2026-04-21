@@ -115,29 +115,47 @@ class ImageGenerator:
         self.row_height = 40
         self.padding = 10
         self.line_height = 22
+        self.title_height = 60  # 标题区域高度
         
-    def generate_table_images(self, data: List[Dict[str, Any]]) -> List[bytes]:
+    def generate_table_images(self, data: List[Dict[str, Any]], sheet_name: str = "") -> List[bytes]:
         """生成表格图片（分批，每批最多50行）
         
+        Args:
+            data: 数据列表
+            sheet_name: Excel sheet名称
+            
         Returns:
             图片字节数据列表
         """
         if not data:
             return [self._generate_empty_image()]
         
+        # 获取当前时间
+        from datetime import datetime
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         # 分批处理
         images = []
         total_rows = len(data)
+        total_batches = (total_rows + self.ROWS_PER_IMAGE - 1) // self.ROWS_PER_IMAGE
         
         for i in range(0, total_rows, self.ROWS_PER_IMAGE):
             batch = data[i:i + self.ROWS_PER_IMAGE]
-            image_bytes = self._generate_single_image(batch, i // self.ROWS_PER_IMAGE + 1, 
-                                                     (total_rows + self.ROWS_PER_IMAGE - 1) // self.ROWS_PER_IMAGE)
+            batch_num = i // self.ROWS_PER_IMAGE + 1
+            image_bytes = self._generate_single_image(
+                batch, 
+                batch_num, 
+                total_batches,
+                sheet_name,
+                current_time
+            )
             images.append(image_bytes)
         
         return images
     
-    def _generate_single_image(self, data: List[Dict[str, Any]], batch_num: int = 1, total_batches: int = 1) -> bytes:
+    def _generate_single_image(self, data: List[Dict[str, Any]], batch_num: int = 1, 
+                               total_batches: int = 1, sheet_name: str = "", 
+                               current_time: str = "") -> bytes:
         """生成单张图片"""
         if not data:
             return self._generate_empty_image()
@@ -175,28 +193,119 @@ class ImageGenerator:
                 row_height = max(row_height, needed_height)
             rows_height.append(row_height)
         
-        total_height = self.header_height + sum(rows_height) + 50  # 增加50像素底部空间用于页码
-        
-        # 如果高度太大，需要缩放
-        max_height = 4000  # 最大高度限制
-        if total_height > max_height:
-            # 对于大数据，需要更激进的压缩
-            pass  # 暂时不处理，因为已经分批了
+        # 计算总高度（标题 + 表头 + 数据 + 底部边距）
+        total_height = (self.title_height + self.header_height + sum(rows_height) + 30)
         
         # 创建图片
         img = Image.new('RGB', (total_width, total_height), (255, 255, 255))
         draw = ImageDraw.Draw(img)
         
-        # 绘制表头
+        # 绘制标题（在最顶部）
+        self._draw_title(draw, sheet_name, current_time, batch_num, total_batches, 
+                        total_width, font)
+        
+        # 绘制表头（在标题下方）
+        header_y = self.title_height
         x = 0
         for col in columns:
             width = column_widths[col]
-            draw.rectangle([x, 0, x + width, self.header_height], 
+            draw.rectangle([x, header_y, x + width, header_y + self.header_height], 
                          fill=self.HEADER_BG_COLOR)
             text = self.COLUMN_DISPLAY.get(col, col)
-            self._draw_centered_text(draw, text, x, 0, width, self.header_height, 
+            self._draw_centered_text(draw, text, x, header_y, width, self.header_height, 
                                    font, self.HEADER_TEXT_COLOR)
             x += width
+        
+        # 绘制数据行
+        y = header_y + self.header_height
+        for i, row in enumerate(data):
+            row_height = rows_height[i]
+            bg_color = self.ROW_BG_COLOR_EVEN if i % 2 == 0 else self.ROW_BG_COLOR_ODD
+            
+            draw.rectangle([0, y, total_width, y + row_height], fill=bg_color)
+            
+            x = 0
+            for col in columns:
+                width = column_widths[col]
+                value = row.get(col, '-')
+                if col == 'date':
+                    value = self._format_date(value)
+                
+                draw.rectangle([x, y, x + width, y + row_height], 
+                             outline=self.BORDER_COLOR, width=1)
+                
+                text = str(value) if value is not None else '-'
+                self._draw_text_left_aligned(draw, text, x + self.padding, y + self.padding,
+                                            width - 2 * self.padding, row_height - 2 * self.padding,
+                                            font, self.ROW_TEXT_COLOR)
+                x += width
+            
+            y += row_height
+        
+        # 保存并压缩
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG', optimize=True)
+        buffer.seek(0)
+        
+        # 检查大小，如果超过限制则压缩
+        image_bytes = buffer.getvalue()
+        max_size = self.MAX_IMAGE_SIZE_MB * 1024 * 1024
+        
+        if len(image_bytes) > max_size:
+            buffer = io.BytesIO()
+            img = img.convert('RGB')
+            for quality in [85, 70, 50, 30]:
+                buffer = io.BytesIO()
+                img.save(buffer, format='JPEG', quality=quality, optimize=True)
+                if buffer.tell() < max_size:
+                    break
+            buffer.seek(0)
+            image_bytes = buffer.getvalue()
+        
+        return image_bytes
+    
+    def _draw_title(self, draw, sheet_name: str, current_time: str, batch_num: int, 
+                   total_batches: int, width: int, font):
+        """绘制标题"""
+        # 标题背景色
+        title_bg_color = (240, 240, 240)
+        
+        # 绘制标题背景
+        draw.rectangle([0, 0, width, self.title_height], fill=title_bg_color)
+        
+        # 构建标题文字
+        if sheet_name:
+            title_text = f"{sheet_name}"
+        else:
+            title_text = "Excel数据推送"
+        
+        # 添加时间和页码
+        if total_batches > 1:
+            subtitle = f"{current_time}  第{batch_num}/{total_batches}页"
+        else:
+            subtitle = current_time
+        
+        # 使用更大的字体（18号）
+        try:
+            title_font = ImageFont.truetype('/System/Library/Fonts/STHeiti Medium.ttc', 18)
+        except:
+            try:
+                title_font = ImageFont.truetype('/System/Library/Fonts/STHeiti Light.ttc', 18)
+            except:
+                title_font = font
+        
+        # 绘制主标题（加粗效果通过使用Medium字体）
+        title_width = self._calculate_text_width(draw, title_text, title_font)
+        title_x = (width - title_width) // 2
+        title_y = 8
+        draw.text((title_x, title_y), title_text, fill=(0, 0, 0), font=title_font)
+        
+        # 绘制副标题（时间和页码）
+        subtitle_font = font  # 使用普通字体
+        subtitle_width = self._calculate_text_width(draw, subtitle, subtitle_font)
+        subtitle_x = (width - subtitle_width) // 2
+        subtitle_y = 35
+        draw.text((subtitle_x, subtitle_y), subtitle, fill=(100, 100, 100), font=subtitle_font)
         
         # 绘制数据行
         y = self.header_height

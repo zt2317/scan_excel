@@ -23,6 +23,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor
 
 # Import core modules
+# 尝试绝对导入（开发环境），然后相对导入，最后处理打包后的环境
 try:
     from core import (
         ExcelReader, SheetData, ColumnDetector, MarkdownFormatter,
@@ -31,13 +32,27 @@ try:
     from core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
     from core.image_generator import ImageGenerator
 except ImportError:
-    # Fallback for relative imports when running as module
-    from ..core import (
-        ExcelReader, SheetData, ColumnDetector, MarkdownFormatter,
-        generate_preview, ConfigStore, WeChatWorkClient
-    )
-    from ..core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
-    from ..core.image_generator import ImageGenerator
+    try:
+        # Fallback for relative imports when running as module
+        from ..core import (
+            ExcelReader, SheetData, ColumnDetector, MarkdownFormatter,
+            generate_preview, ConfigStore, WeChatWorkClient
+        )
+        from ..core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
+        from ..core.image_generator import ImageGenerator
+    except ImportError:
+        # Final fallback for PyInstaller frozen environment
+        import sys
+        import os
+        if getattr(sys, 'frozen', False):
+            # 在PyInstaller打包环境下，尝试直接从core导入
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from core import (
+            ExcelReader, SheetData, ColumnDetector, MarkdownFormatter,
+            generate_preview, ConfigStore, WeChatWorkClient
+        )
+        from core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
+        from core.image_generator import ImageGenerator
 
 
 # Sheet数据类型别名（GUI内部使用的格式）

@@ -16,12 +16,25 @@ Excel数据推送助手 - 应用程序入口 (PyQt6版本)
 
 import sys
 import traceback
+import os
 from pathlib import Path
 
-# Add src to path for imports
-src_dir = Path(__file__).parent
-if str(src_dir) not in sys.path:
-    sys.path.insert(0, str(src_dir))
+# 添加当前目录到路径（支持PyInstaller打包后运行）
+if getattr(sys, 'frozen', False):
+    # 运行在PyInstaller打包后的exe中
+    application_path = Path(sys.executable).parent
+else:
+    # 运行在普通Python环境中
+    application_path = Path(__file__).parent
+
+if str(application_path) not in sys.path:
+    sys.path.insert(0, str(application_path))
+
+# 在Windows下添加frozen路径检查
+if getattr(sys, 'frozen', False) and sys.platform == 'win32':
+    # PyInstaller会在_MEIPASS临时目录解压文件
+    if hasattr(sys, '_MEIPASS'):
+        sys.path.insert(0, sys._MEIPASS)
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt

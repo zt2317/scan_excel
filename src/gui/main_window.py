@@ -128,30 +128,51 @@ class SendThread(WorkerThread):
             self.status_signal.emit('正在生成图片...')
             self.progress_signal.emit(10)
             
-            # Generate image
+            # Generate images (batched)
             image_gen = ImageGenerator()
-            image_bytes = image_gen.generate_table_image(self.data)
+            image_bytes_list = image_gen.generate_table_images(self.data)
+            total_images = len(image_bytes_list)
             
-            self.status_signal.emit('正在发送图片...')
-            self.progress_signal.emit(50)
+            self.status_signal.emit(f'生成{total_images}张图片，开始发送...')
+            self.progress_signal.emit(20)
             
-            # Send image
-            result = client.send_image(image_bytes)
+            # Send images one by one
+            results = []
+            for i, image_bytes in enumerate(image_bytes_list, 1):
+                self.status_signal.emit(f'正在发送第{i}/{total_images}张图片...')
+                progress = 20 + int(70 * i / total_images)
+                self.progress_signal.emit(progress)
+                
+                result = client.send_image(image_bytes)
+                results.append(result)
+                
+                if not result.get('success'):
+                    error = result.get('error', '未知错误')
+                    self.completed_signal.emit(
+                        False,
+                        f'第{i}张图片发送失败：{error}',
+                        '发送失败'
+                    )
+                    return
+                
+                # Delay between images
+                if i < total_images:
+                    import time
+                    time.sleep(1.0)
             
             self.progress_signal.emit(100)
             
-            if result.get('success'):
+            if total_images > 1:
+                self.completed_signal.emit(
+                    True, 
+                    f'成功发送{total_images}张图片！',
+                    '发送成功'
+                )
+            else:
                 self.completed_signal.emit(
                     True, 
                     '图片发送成功！',
                     '发送成功'
-                )
-            else:
-                error = result.get('error', '未知错误')
-                self.completed_signal.emit(
-                    False,
-                    f'发送失败：{error}',
-                    '发送失败'
                 )
         
         except WeChatAPIError as e:

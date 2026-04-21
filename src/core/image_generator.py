@@ -105,8 +105,40 @@ class ImageGenerator:
         
         return column_widths
     
-    def generate_table_image(self, data: List[Dict[str, Any]]) -> bytes:
-        """生成表格图片"""
+    # 企业微信限制
+    MAX_IMAGE_SIZE_MB = 2  # 2MB
+    MAX_IMAGE_WIDTH = 1200  # 最大宽度
+    ROWS_PER_IMAGE = 50  # 每批最多50行
+    
+    def __init__(self):
+        self.header_height = 50
+        self.row_height = 40
+        self.padding = 10
+        self.line_height = 22
+        
+    def generate_table_images(self, data: List[Dict[str, Any]]) -> List[bytes]:
+        """生成表格图片（分批，每批最多50行）
+        
+        Returns:
+            图片字节数据列表
+        """
+        if not data:
+            return [self._generate_empty_image()]
+        
+        # 分批处理
+        images = []
+        total_rows = len(data)
+        
+        for i in range(0, total_rows, self.ROWS_PER_IMAGE):
+            batch = data[i:i + self.ROWS_PER_IMAGE]
+            image_bytes = self._generate_single_image(batch, i // self.ROWS_PER_IMAGE + 1, 
+                                                     (total_rows + self.ROWS_PER_IMAGE - 1) // self.ROWS_PER_IMAGE)
+            images.append(image_bytes)
+        
+        return images
+    
+    def _generate_single_image(self, data: List[Dict[str, Any]], batch_num: int = 1, total_batches: int = 1) -> bytes:
+        """生成单张图片"""
         if not data:
             return self._generate_empty_image()
         
@@ -123,6 +155,13 @@ class ImageGenerator:
         # 计算总宽度
         total_width = sum(column_widths.values())
         
+        # 限制最大宽度
+        if total_width > self.MAX_IMAGE_WIDTH:
+            scale = self.MAX_IMAGE_WIDTH / total_width
+            for col in columns:
+                column_widths[col] = int(column_widths[col] * scale)
+            total_width = sum(column_widths.values())
+        
         # 计算每行高度和总高度
         rows_height = []
         for row in data:
@@ -138,14 +177,11 @@ class ImageGenerator:
         
         total_height = self.header_height + sum(rows_height) + 20
         
-        # 限制最大宽度（企业微信限制）
-        max_width = 1200
-        if total_width > max_width:
-            # 按比例缩小
-            scale = max_width / total_width
-            for col in columns:
-                column_widths[col] = int(column_widths[col] * scale)
-            total_width = sum(column_widths.values())
+        # 如果高度太大，需要缩放
+        max_height = 4000  # 最大高度限制
+        if total_height > max_height:
+            # 对于大数据，需要更激进的压缩
+            pass  # 暂时不处理，因为已经分批了
         
         # 创建图片
         img = Image.new('RGB', (total_width, total_height), (255, 255, 255))
@@ -155,10 +191,8 @@ class ImageGenerator:
         x = 0
         for col in columns:
             width = column_widths[col]
-            # 表头背景
             draw.rectangle([x, 0, x + width, self.header_height], 
                          fill=self.HEADER_BG_COLOR)
-            # 表头文字（居中）
             text = self.COLUMN_DISPLAY.get(col, col)
             self._draw_centered_text(draw, text, x, 0, width, self.header_height, 
                                    font, self.HEADER_TEXT_COLOR)
@@ -170,10 +204,8 @@ class ImageGenerator:
             row_height = rows_height[i]
             bg_color = self.ROW_BG_COLOR_EVEN if i % 2 == 0 else self.ROW_BG_COLOR_ODD
             
-            # 行背景
             draw.rectangle([0, y, total_width, y + row_height], fill=bg_color)
             
-            # 绘制单元格
             x = 0
             for col in columns:
                 width = column_widths[col]
@@ -181,11 +213,9 @@ class ImageGenerator:
                 if col == 'date':
                     value = self._format_date(value)
                 
-                # 单元格边框
                 draw.rectangle([x, y, x + width, y + row_height], 
                              outline=self.BORDER_COLOR, width=1)
                 
-                # 文字（左对齐，支持多行）
                 text = str(value) if value is not None else '-'
                 self._draw_text_left_aligned(draw, text, x + self.padding, y + self.padding,
                                             width - 2 * self.padding, row_height - 2 * self.padding,
@@ -194,11 +224,36 @@ class ImageGenerator:
             
             y += row_height
         
-        # 保存
+        # 添加批次标记
+        if total_batches > 1:
+            batch_text = f"第{batch_num}/{total_batches}页"
+            text_width = self._calculate_text_width(draw, batch_text, font)
+            draw.text((total_width - text_width - 10, total_height - 25), 
+                     batch_text, fill=(100, 100, 100), font=font)
+        
+        # 保存并压缩
         buffer = io.BytesIO()
-        img.save(buffer, format='PNG', quality=95)
+        img.save(buffer, format='PNG', optimize=True)
         buffer.seek(0)
-        return buffer.getvalue()
+        
+        # 检查大小，如果超过限制则压缩
+        image_bytes = buffer.getvalue()
+        max_size = self.MAX_IMAGE_SIZE_MB * 1024 * 1024
+        
+        if len(image_bytes) > max_size:
+            # 转换为JPEG并压缩
+            buffer = io.BytesIO()
+            img = img.convert('RGB')
+            # 逐步降低质量直到满足大小要求
+            for quality in [85, 70, 50, 30]:
+                buffer = io.BytesIO()
+                img.save(buffer, format='JPEG', quality=quality, optimize=True)
+                if buffer.tell() < max_size:
+                    break
+            buffer.seek(0)
+            image_bytes = buffer.getvalue()
+        
+        return image_bytes
     
     def _draw_centered_text(self, draw, text, x, y, width, height, font, color):
         """绘制居中的文字"""

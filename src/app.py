@@ -15,7 +15,7 @@ Excel数据推送助手 - 应用程序入口
 """
 
 import sys
-import tkinter as tk
+import platform
 from pathlib import Path
 
 # Add src to path for imports
@@ -23,6 +23,7 @@ src_dir = Path(__file__).parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
+# Import main_window first (it sets up DPI awareness on Windows)
 from gui.main_window import MainWindow
 
 
@@ -57,6 +58,9 @@ def setup_global_exception_handler(root):
 
 def main():
     """应用程序主入口"""
+    # macOS compatibility: Import tkinter after main_window on older systems
+    import tkinter as tk
+    
     # 创建Tk根窗口
     root = tk.Tk()
     

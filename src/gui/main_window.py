@@ -29,14 +29,14 @@ try:
         ExcelReader, ColumnDetector, MarkdownFormatter,
         generate_preview, ConfigStore, WeChatWorkClient
     )
-    from core.exceptions import WeChatAPIError, NetworkError
+    from core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
 except ImportError:
     # Fallback for relative imports when running as module
     from ..core import (
         ExcelReader, ColumnDetector, MarkdownFormatter,
         generate_preview, ConfigStore, WeChatWorkClient
     )
-    from ..core.exceptions import WeChatAPIError, NetworkError
+    from ..core.exceptions import WeChatAPIError, NetworkError, ExcelFormatError
 
 
 class MainWindow:
@@ -79,6 +79,99 @@ class MainWindow:
         x = (self.root.winfo_screenwidth() // 2) - (self.WINDOW_WIDTH // 2)
         y = (self.root.winfo_screenheight() // 2) - (self.WINDOW_HEIGHT // 2)
         self.root.geometry(f"{self.WINDOW_WIDTH}x{self.WINDOW_HEIGHT}+{x}+{y}")
+    
+    def _show_error(self, title: str, message: str, level: str = 'error', 
+                    suggestion: str = None, show_retry: bool = False):
+        """显示错误信息
+        
+        Args:
+            title: 错误标题
+            message: 错误消息
+            level: 错误级别 ('error'弹窗, 'warning'弹窗, 'info'状态栏)
+            suggestion: 解决建议（可选）
+            show_retry: 是否显示重试按钮
+        """
+        full_message = message
+        if suggestion:
+            full_message = f"{message}\n\n解决建议：{suggestion}"
+        
+        if level == 'error':
+            if show_retry:
+                # 询问是否重试
+                result = messagebox.askretrycancel(title, full_message)
+                return result  # True=重试, False=取消
+            else:
+                messagebox.showerror(title, full_message)
+        elif level == 'warning':
+            messagebox.showwarning(title, full_message)
+        else:
+            # info级别显示在状态栏
+            self._set_status(full_message, 'error')
+    
+    def _handle_network_error(self, error: NetworkError) -> bool:
+        """处理网络错误，返回是否用户选择重试
+        
+        Args:
+            error: NetworkError实例
+            
+        Returns:
+            True if user chose to retry, False otherwise
+        """
+        message = str(error)
+        suggestion = "请检查网络连接，然后点击\"重新发送\"按钮重试。"
+        
+        # 提取超时信息
+        if 'timeout' in message.lower():
+            title = "网络超时"
+            suggestion = "网络连接超时，请检查网络连接后点击\"重新发送\"按钮重试。"
+        else:
+            title = "网络错误"
+        
+        return self._show_error(
+            title, message, 
+            level='error', 
+            suggestion=suggestion,
+            show_retry=True
+        )
+    
+    def _handle_webhook_error(self, error: WeChatAPIError):
+        """处理webhook配置错误
+        
+        Args:
+            error: WeChatAPIError实例
+        """
+        errcode = getattr(error, 'errcode', None)
+        message = str(error)
+        
+        if errcode == 40013:
+            # key无效
+            title = "企业微信配置错误"
+            suggestion = "webhook地址无效，请检查配置是否正确。可能的原因：\n1. key被复制错误\n2. 机器人已被删除\n3. 机器人被禁用"
+        else:
+            title = "发送失败"
+            suggestion = "请检查企业微信机器人状态，或稍后重试。"
+        
+        self._show_error(title, message, level='error', suggestion=suggestion)
+    
+    def _handle_excel_error(self, error: ExcelFormatError):
+        """处理Excel读取错误
+        
+        Args:
+            error: ExcelFormatError实例
+        """
+        message = str(error)
+        error_code = getattr(error, 'error_code', None)
+        
+        if error_code == 'PASSWORD_PROTECTED':
+            title = "无法打开文件"
+        elif error_code == 'CORRUPTED_FILE':
+            title = "文件损坏"
+        elif error_code == 'UNSUPPORTED_FORMAT':
+            title = "格式不支持"
+        else:
+            title = "读取失败"
+        
+        self._show_error(title, message, level='error')
     
     def _create_styles(self):
         """创建ttk样式 (D-31)"""

@@ -3,7 +3,7 @@
 将数据表格生成为图片，支持企业微信发送
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 import io
@@ -25,13 +25,13 @@ class ImageGenerator:
     # 列顺序
     COLUMN_ORDER = ['date', 'shipper', 'tracking', 'inbound_pending', 'outbound_pending']
     
-    # 列宽配置（像素）
-    COLUMN_WIDTHS = {
-        'date': 120,
-        'shipper': 100,
-        'tracking': 160,
-        'inbound_pending': 140,
-        'outbound_pending': 140
+    # 最小列宽配置（像素）
+    MIN_COLUMN_WIDTHS = {
+        'date': 100,
+        'shipper': 80,
+        'tracking': 120,
+        'inbound_pending': 100,
+        'outbound_pending': 100
     }
     
     # 样式配置
@@ -41,33 +41,90 @@ class ImageGenerator:
     ROW_BG_COLOR_ODD = (240, 240, 240)  # 浅灰
     ROW_TEXT_COLOR = (0, 0, 0)  # 黑色
     BORDER_COLOR = (200, 200, 200)  # 灰色
-    LINE_COLOR = (200, 200, 200)  # 分隔线颜色
     
     def __init__(self):
         self.header_height = 50
-        self.row_height = 60
+        self.row_height = 40
         self.padding = 10
+        self.line_height = 22
         
-    def generate_table_image(self, data: List[Dict[str, Any]]) -> bytes:
-        """生成表格图片
+    def _get_font(self):
+        """获取字体"""
+        try:
+            # macOS 中文字体
+            return ImageFont.truetype('/System/Library/Fonts/STHeiti Light.ttc', 14)
+        except:
+            try:
+                # 备选字体
+                return ImageFont.truetype('/System/Library/Fonts/NotoSansCJK.ttc', 14)
+            except:
+                try:
+                    # Windows 字体
+                    return ImageFont.truetype('msyh.ttc', 14)
+                except:
+                    # 使用默认字体
+                    return ImageFont.load_default()
+    
+    def _calculate_text_width(self, draw, text: str, font) -> int:
+        """计算文字宽度"""
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0]
+    
+    def _calculate_column_widths(self, data: List[Dict], columns: List[str], font) -> Dict[str, int]:
+        """根据内容计算每列的实际宽度"""
+        # 创建临时图片用于计算
+        temp_img = Image.new('RGB', (1, 1))
+        temp_draw = ImageDraw.Draw(temp_img)
         
-        Args:
-            data: 数据列表
+        column_widths = {}
+        
+        for col in columns:
+            # 最小宽度
+            min_width = self.MIN_COLUMN_WIDTHS.get(col, 100)
+            max_width = min_width
             
-        Returns:
-            图片字节数据
-        """
+            # 检查表头宽度
+            header_text = self.COLUMN_DISPLAY.get(col, col)
+            header_width = self._calculate_text_width(temp_draw, header_text, font) + 2 * self.padding
+            max_width = max(max_width, header_width)
+            
+            # 检查所有数据行的宽度
+            for row in data:
+                value = row.get(col, '-')
+                if col == 'date':
+                    value = self._format_date(value)
+                
+                # 处理多行，取最长的一行
+                lines = str(value).split('\n')
+                for line in lines:
+                    line_width = self._calculate_text_width(temp_draw, line, font) + 2 * self.padding
+                    max_width = max(max_width, line_width)
+            
+            # 添加一些边距
+            column_widths[col] = int(max_width) + 20
+        
+        return column_widths
+    
+    def generate_table_image(self, data: List[Dict[str, Any]]) -> bytes:
+        """生成表格图片"""
         if not data:
             return self._generate_empty_image()
         
-        # 计算图片尺寸
+        # 确定要显示的列
         available_cols = set(data[0].keys())
         columns = [col for col in self.COLUMN_ORDER if col in available_cols]
         
-        total_width = sum(self.COLUMN_WIDTHS.get(col, 100) for col in columns)
+        # 获取字体
+        font = self._get_font()
         
-        # 计算每行的实际高度，然后求和
-        total_row_height = 0
+        # 计算列宽
+        column_widths = self._calculate_column_widths(data, columns, font)
+        
+        # 计算总宽度
+        total_width = sum(column_widths.values())
+        
+        # 计算每行高度和总高度
+        rows_height = []
         for row in data:
             row_height = self.row_height
             for col in columns:
@@ -75,90 +132,69 @@ class ImageGenerator:
                 if col == 'date':
                     value = self._format_date(value)
                 lines = str(value).split('\n')
-                # 每行文字高度约20像素
-                needed_height = max(len(lines) * 20 + 20, self.row_height)
+                needed_height = len(lines) * self.line_height + 2 * self.padding
                 row_height = max(row_height, needed_height)
-            total_row_height += row_height
+            rows_height.append(row_height)
         
-        total_height = self.header_height + total_row_height + 20
+        total_height = self.header_height + sum(rows_height) + 20
+        
+        # 限制最大宽度（企业微信限制）
+        max_width = 1200
+        if total_width > max_width:
+            # 按比例缩小
+            scale = max_width / total_width
+            for col in columns:
+                column_widths[col] = int(column_widths[col] * scale)
+            total_width = sum(column_widths.values())
         
         # 创建图片
         img = Image.new('RGB', (total_width, total_height), (255, 255, 255))
         draw = ImageDraw.Draw(img)
         
-        # 尝试加载字体
-        try:
-            # macOS 中文字体
-            font = ImageFont.truetype('/System/Library/Fonts/STHeiti Light.ttc', 14)
-            header_font = ImageFont.truetype('/System/Library/Fonts/STHeiti Medium.ttc', 16)
-        except:
-            try:
-                # 备选字体
-                font = ImageFont.truetype('/System/Library/Fonts/NotoSansCJK.ttc', 14)
-                header_font = ImageFont.truetype('/System/Library/Fonts/NotoSansCJK.ttc', 16)
-            except:
-                try:
-                    # Windows 字体
-                    font = ImageFont.truetype('msyh.ttc', 14)
-                    header_font = ImageFont.truetype('msyh.ttc', 16)
-                except:
-                    # 使用默认字体（可能不支持中文）
-                    font = ImageFont.load_default()
-                    header_font = ImageFont.load_default()
-        
         # 绘制表头
         x = 0
         for col in columns:
-            width = self.COLUMN_WIDTHS.get(col, 100)
-            # 绘制表头背景
+            width = column_widths[col]
+            # 表头背景
             draw.rectangle([x, 0, x + width, self.header_height], 
                          fill=self.HEADER_BG_COLOR)
-            # 绘制表头文字
+            # 表头文字（居中）
             text = self.COLUMN_DISPLAY.get(col, col)
             self._draw_centered_text(draw, text, x, 0, width, self.header_height, 
-                                   header_font, self.HEADER_TEXT_COLOR)
+                                   font, self.HEADER_TEXT_COLOR)
             x += width
         
         # 绘制数据行
         y = self.header_height
         for i, row in enumerate(data):
-            # 计算行高（根据多行内容）
-            row_height = self.row_height
-            for col in columns:
-                value = row.get(col, '-')
-                if col == 'date':
-                    value = self._format_date(value)
-                lines = str(value).split('\n')
-                # 每行文字高度约20像素
-                needed_height = max(len(lines) * 20 + 20, self.row_height)
-                row_height = max(row_height, needed_height)
-            
-            # 绘制行背景
+            row_height = rows_height[i]
             bg_color = self.ROW_BG_COLOR_EVEN if i % 2 == 0 else self.ROW_BG_COLOR_ODD
+            
+            # 行背景
             draw.rectangle([0, y, total_width, y + row_height], fill=bg_color)
             
-            # 绘制单元格内容和边框
+            # 绘制单元格
             x = 0
             for col in columns:
-                width = self.COLUMN_WIDTHS.get(col, 100)
+                width = column_widths[col]
                 value = row.get(col, '-')
                 if col == 'date':
                     value = self._format_date(value)
                 
-                # 绘制单元格边框
+                # 单元格边框
                 draw.rectangle([x, y, x + width, y + row_height], 
                              outline=self.BORDER_COLOR, width=1)
                 
-                # 绘制文字（支持多行）
+                # 文字（左对齐，支持多行）
                 text = str(value) if value is not None else '-'
-                self._draw_multiline_text(draw, text, x + self.padding, y + self.padding,
-                                        width - 2 * self.padding, row_height - 2 * self.padding,
-                                        font, self.ROW_TEXT_COLOR)
+                self._draw_text_left_aligned(draw, text, x + self.padding, y + self.padding,
+                                            width - 2 * self.padding, row_height - 2 * self.padding,
+                                            font, self.ROW_TEXT_COLOR)
                 x += width
             
             y += row_height
         
-        # 保存为字节
+        # 保存
         buffer = io.BytesIO()
         img.save(buffer, format='PNG', quality=95)
         buffer.seek(0)
@@ -174,65 +210,29 @@ class ImageGenerator:
         text_y = y + (height - text_height) // 2
         draw.text((text_x, text_y), text, fill=color, font=font)
     
-    def _draw_multiline_text(self, draw, text, x, y, max_width, max_height, font, color):
-        """绘制多行文字，自动换行防止写出格子"""
+    def _draw_text_left_aligned(self, draw, text, x, y, max_width, max_height, font, color):
+        """绘制左对齐的多行文字"""
         lines = text.split('\n')
-        line_height = 20
         current_y = y
         
         for line in lines:
-            if current_y + line_height > y + max_height:
+            if current_y + self.line_height > y + max_height:
                 break
-            
-            # 检查文字宽度，如果太长则截断
-            bbox = draw.textbbox((0, 0), line, font=font)
-            text_width = bbox[2] - bbox[0]
-            
-            if text_width > max_width:
-                # 文字太长，需要截断并加省略号
-                truncated_line = self._truncate_text(draw, line, max_width - 10, font)  # 留10px给"..."
-                draw.text((x, current_y), truncated_line + "...", fill=color, font=font)
-            else:
-                draw.text((x, current_y), line, fill=color, font=font)
-            
-            current_y += line_height
-    
-    def _truncate_text(self, draw, text, max_width, font):
-        """截断文字到指定宽度"""
-        # 逐字符检查宽度
-        for i in range(len(text), 0, -1):
-            bbox = draw.textbbox((0, 0), text[:i], font=font)
-            text_width = bbox[2] - bbox[0]
-            if text_width <= max_width:
-                return text[:i]
-        return text[:1] if text else ""
+            draw.text((x, current_y), line, fill=color, font=font)
+            current_y += self.line_height
     
     def _format_date(self, value: Any) -> str:
         """格式化日期"""
         if not value or value == '-':
             return '-'
-        
-        value_str = str(value).strip()
-        
-        # 已经是 YYYY-MM-DD 格式
-        if len(value_str) == 10 and value_str[4] == '-' and value_str[7] == '-':
-            return value_str
-        
-        return value_str
+        return str(value).strip()
     
     def _generate_empty_image(self) -> bytes:
         """生成空数据图片"""
         img = Image.new('RGB', (400, 100), (255, 255, 255))
         draw = ImageDraw.Draw(img)
         
-        try:
-            font = ImageFont.truetype('/System/Library/Fonts/PingFang.ttc', 16)
-        except:
-            try:
-                font = ImageFont.truetype('msyh.ttc', 16)
-            except:
-                font = ImageFont.load_default()
-        
+        font = self._get_font()
         draw.text((100, 40), "暂无数据", fill=(100, 100, 100), font=font)
         
         buffer = io.BytesIO()

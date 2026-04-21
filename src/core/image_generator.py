@@ -47,6 +47,7 @@ class ImageGenerator:
         self.row_height = 40
         self.padding = 10
         self.line_height = 22
+        self.title_height = 60  # 标题区域高度
         
     def _get_font(self):
         """获取字体"""
